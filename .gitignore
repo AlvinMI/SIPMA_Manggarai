@@ -1,0 +1,13 @@
+# Python environment
+venv/
+__pycache__/
+
+# Large data & models
+*.csv
+*.h5
+*.sav
+*.pkl
+
+# System files
+.DS_Store
+.ipynb_checkpoints/
