@@ -46,26 +46,111 @@ st.markdown(f"""<style>
 *{{box-sizing:border-box;}}
 html,body,.stApp{{font-family:'Inter',sans-serif;background:{BG}!important;color:{TEXT}!important;}}
 
-/* Sembunyikan semua elemen bawaan Streamlit termasuk sidebar dan artifact div */
+/* 1. Tembak langsung class pembungkus cache yang bikin kotak abu-abu */
+[class*="st-emotion-cache-vr7txb"],
+.st-emotion-cache-vr7txb,
+div[data-testid="stElementToolbar"] {{
+    display: none !important;
+    visibility: hidden !important;
+    opacity: 0 !important;
+    height: 0 !important;
+    width: 0 !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    pointer-events: none !important;
+}}
+
+/* 2. Tembak tombol button internalnya biar gak nge-render background */
+button[data-testid*="stBaseButton-elementToolbar"],
+button[aria-label="Copy to clipboard"],
+.stTooltipHoverTarget {{
+    display: none !important;
+    visibility: hidden !important;
+    background: transparent !important;
+    border: none !important;
+    box-shadow: none !important;
+}}
+
+/* 3. Paksa kontainer HTML block agar bersih total tanpa sisa wrapper */
+div[data-testid="stHtmlBlock"], 
+div[data-testid="stHtmlBlock"] > div {{
+    background: transparent !important;
+    border: none !important;
+    box-shadow: none !important;
+}}
+
+/* Sembunyikan elemen bawaan Streamlit */
 footer,#MainMenu,
 [data-testid="stToolbar"],[data-testid="stDecoration"],
-[data-testid="stAppDeployButton"],[data-testid="stHeader"],
+[data-testid="stAppDeployButton"],
 [data-testid="stSidebar"],[data-testid="stSidebarCollapseButton"],
 [data-testid="collapsedControl"],[data-testid="stStatusWidget"],
 [data-testid="stToolbarActions"],[class*="ToolbarActions"],
 [class*="AppToolbar"],[class*="DeployButton"],[class*="StatusWidget"]
-{{display:none!important;}}
+{{display:none!important;visibility:hidden!important;}}
 
-/* Overlay pojok kanan atas — tutup </div> artifact Streamlit */
-body::before{{
-    content:'' !important; display:block !important;
-    position:fixed !important; top:0 !important; right:0 !important;
-    width:320px !important; height:64px !important;
-    background:{BG} !important; z-index:2147483647 !important;
-    pointer-events:none !important;
+/* Sembunyikan header bawaan secara total */
+[data-testid="stHeader"] {{
+    display: none !important;
 }}
 
-.block-container{{padding:0 0 1rem 0!important;max-width:100%!important;}}
+/* Matikan fungsi overlay lama */
+.stApp::after {{
+    display: none !important;
+    content: none !important;
+}}
+
+/* HANCURKAN TOTAL KOTAK SISA BLOCK CODE NYASAR DI BAWAH JAM */
+[data-testid="stMarkdownPre"],
+div[data-testid="stCode"],
+.stCode {{
+    background: transparent !important;
+    background-color: transparent !important;
+    border: none !important;
+    box-shadow: none !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    height: 0 !important;
+    min-height: 0 !important;
+}}
+
+/* Hilangkan sisa element toolbar, button copy, dan tooltip di dalam kotak tersebut */
+div[data-testid="stCode"] + div,
+.stCode + div,
+[class*="st-emotion-cache-1s3zrln"],
+.st-emotion-cache-1s3zrln,
+button[aria-label="Copy to clipboard"],
+button[data-testid*="stBaseButton-elementToolbar"] {{
+    display: none !important;
+    visibility: hidden !important;
+    opacity: 0 !important;
+    height: 0 !important;
+    width: 0 !important;
+    padding: 0 !important;
+    margin: 0 !important;
+}}
+
+/* Ratakan element pre bawaan agar tidak menyisakan ruang kosong */
+pre[class*="st-emotion-cache-bewo51"],
+.st-emotion-cache-bewo51 {{
+    display: none !important;
+    height: 0 !important;
+    margin: 0 !important;
+    padding: 0 !important;
+}}
+
+/* =========================================================================
+   PAKSA PANEL KOLOM KIRI (PANEL_COL) AGAR STICKY / FIXED PAS DI-SCROLL
+   ========================================================================= */
+[data-testid="stHorizontalBlock"] > [data-testid="stColumn"]:first-child {{
+    position: sticky !important;
+    top: 1rem !important;
+    z-index: 99 !important;
+    max-height: 95vh !important;
+    overflow-y: auto !important;
+}}
+
+.block-container{{padding:0 1.25rem 1rem 1.25rem!important;max-width:100%!important;}}
 
 [data-testid="stMetric"]{{background:{CARD}!important;border:1px solid {BORDER}!important;border-radius:10px!important;padding:.9rem 1.1rem!important;}}
 [data-testid="stMetricLabel"] div{{font-size:.7rem!important;color:{MUTED}!important;text-transform:uppercase!important;letter-spacing:.08em!important;}}
@@ -119,14 +204,33 @@ iframe[height="0"]{{display:block!important;height:0!important;margin:0!importan
     padding:0!important;border:none!important;}}
 </style>""", unsafe_allow_html=True)
 
-# ── KONSTANTA ──────────────────────────────────────────────────────────────
-# Nilai aktual dari notebook training (output cell terakhir)
-EVAL = {
-    "LSTM": {"RMSE": 25.4271, "MAE": 12.8734, "R2": 0.7932},
-    "RF"  : {"RMSE": 26.5742, "MAE": 13.6658, "R2": 0.7735},
-}
-# LSTM unggul di semua metrik: RMSE 25.43 < 26.57, MAE 12.87 < 13.67, R2 0.793 > 0.773
-# Sesuai output notebook Anda
+# ── KONSTANTA — baca dari meta.json jika ada, fallback ke default ──────────
+def _load_eval_meta():
+    """
+    Baca metrics dari models/meta.json yang disimpan notebook.
+    Format meta.json:
+    {
+      "LSTM": {"RMSE": ..., "MAE": ..., "R2": ...},
+      "RF":   {"RMSE": ..., "MAE": ..., "R2": ...}
+    }
+    Jika tidak ada, pakai nilai terakhir dari notebook.
+    """
+    meta_path = "models/meta.json"
+    if os.path.exists(meta_path):
+        try:
+            import json
+            with open(meta_path) as f:
+                meta = json.load(f)
+            if "LSTM" in meta and "RF" in meta:
+                return meta
+        except: pass
+    # Fallback: nilai dari notebook terbaru (daily, tma_mean)
+    return {
+        "LSTM": {"RMSE": 31.71, "MAE": 23.05, "R2": 0.5200},
+        "RF"  : {"RMSE": 42.77, "MAE": 30.56, "R2": 0.3120},
+    }
+
+EVAL = _load_eval_meta()
 
 SIAGA = [
     {"lvl":1,"label":"BAHAYA","cls":"bahaya","icon":"🔴","min":950,"max":9999,"color":R},
@@ -146,22 +250,70 @@ def get_siaga(tma):
         if s["min"] <= tma <= s["max"]: return s
     return SIAGA[-1]
 
-# ── MODEL ──────────────────────────────────────────────────────────────────
+# ── MODEL — auto-detect file terbaru di folder models/ ────────────────────
+import glob, pathlib
+
+def _latest(pattern):
+    """Ambil file paling baru yang cocok dengan pattern glob."""
+    files = glob.glob(pattern)
+    if not files:
+        return None
+    return max(files, key=os.path.getmtime)
+
+def _read_model_meta(path):
+    """Baca metadata dari file meta.json jika ada (disimpan notebook)."""
+    meta_path = os.path.join(os.path.dirname(path), "meta.json")
+    if os.path.exists(meta_path):
+        try:
+            import json
+            with open(meta_path) as f:
+                return json.load(f)
+        except: pass
+    return {}
+
 @st.cache_resource(show_spinner="Memuat model…")
 def load_models():
     m = {}
-    try:
-        m["lstm"] = load_model("models/model_lstm_manggarai.h5", compile=False)
-        m["sl"]   = joblib.load("models/scaler_tma.sav")
-        m["lstm_ok"] = True
-    except Exception as e:
-        m["lstm_ok"] = False; m["lstm_err"] = str(e)
-    try:
-        m["rf"]  = joblib.load("models/model_rf_manggarai.sav")
-        m["sr"]  = joblib.load("models/scaler_rf.sav")
-        m["rf_ok"] = True
-    except Exception as e:
-        m["rf_ok"] = False; m["rf_err"] = str(e)
+    # ── LSTM: cari .h5 terbaru ──
+    lstm_path = _latest("models/*.h5")
+    scaler_lstm = _latest("models/scaler_tma*.sav") or _latest("models/scaler*.sav")
+    if lstm_path and scaler_lstm:
+        try:
+            m["lstm"]    = load_model(lstm_path, compile=False)
+            m["sl"]      = joblib.load(scaler_lstm)
+            m["lstm_ok"] = True
+            m["lstm_file"]= os.path.basename(lstm_path)
+        except Exception as e:
+            m["lstm_ok"] = False; m["lstm_err"] = str(e)
+    else:
+        m["lstm_ok"] = False
+        m["lstm_err"] = f"Tidak ada .h5 atau scaler di folder models/ (dicari: {lstm_path}, {scaler_lstm})"
+
+    # ── RF: cari .sav terbaru yang mengandung 'rf' ──
+    rf_path = _latest("models/*rf*.sav")
+    scaler_rf = _latest("models/scaler_rf*.sav")
+    # fallback jika scaler_rf sama dengan scaler_lstm
+    if scaler_rf and scaler_lstm and os.path.abspath(scaler_rf) == os.path.abspath(scaler_lstm):
+        scaler_rf = None
+    if rf_path and scaler_rf:
+        try:
+            m["rf"]    = joblib.load(rf_path)
+            m["sr"]    = joblib.load(scaler_rf)
+            m["rf_ok"] = True
+            m["rf_file"]= os.path.basename(rf_path)
+        except Exception as e:
+            m["rf_ok"] = False; m["rf_err"] = str(e)
+    else:
+        m["rf_ok"] = False
+        m["rf_err"] = f"Tidak ada model RF atau scaler RF di folder models/ (dicari: {rf_path}, {scaler_rf})"
+
+    # ── Deteksi window & kolom dari nama file ──
+    lstm_name = m.get("lstm_file", "")
+    m["is_daily"]  = "daily" in lstm_name.lower()
+    m["window"]    = 24
+    m["forecast"]  = 6
+    m["col_target"]= "tma_mean" if m["is_daily"] else "tinggi_air"
+
     return m
 
 MDL = load_models()
@@ -180,7 +332,8 @@ def pred_lstm(arr):
     if not MDL.get("lstm_ok"): return None
     try:
         sc = MDL["sl"]
-        p  = MDL["lstm"].predict(sc.transform(arr).reshape(1,24,1), verbose=0)
+        w  = MDL.get("window", 24)
+        p  = MDL["lstm"].predict(sc.transform(arr).reshape(1,w,1), verbose=0)
         return inv(sc, float(p[0][0]))
     except: return None
 
@@ -192,116 +345,131 @@ def pred_rf(arr):
         return inv(sc, float(p[0]))
     except: return None
 
-# ── DATA EVALUASI: jalankan model nyata terhadap data bersih ───────────────
+# ── DATA EVALUASI — auto mengikuti model & data terbaru ────────────────────
 @st.cache_data(show_spinner="Memuat data evaluasi…")
 def get_eval_data():
     """
-    Baca Data_Final_Manggarai_Clean.csv, bentuk window (24,6),
-    lalu jalankan model LSTM & RF yang sudah dilatih.
-    Fallback ke simulasi deterministik jika file tidak ada.
+    Baca file CSV data (Daily atau Clean), bentuk window sesuai MDL["window"],
+    jalankan model LSTM & RF. Otomatis mengikuti model terbaru yang diload.
     """
-    result = {}
+    result  = {}
     file_ok = False
 
-    try:
-        df = pd.read_csv(
-            "data/Data_Final_Manggarai_Clean.csv",
-            parse_dates=["tanggal"]
-        )
-        if "tanggal" not in df.columns or "tinggi_air" not in df.columns:
-            raise ValueError(f"Kolom tidak sesuai: {list(df.columns)}")
+    WINDOW   = MDL.get("window",    24)
+    FORECAST = MDL.get("forecast",  6)
+    COL      = MDL.get("col_target","tma_mean")
+    sl       = MDL.get("sl");  sr  = MDL.get("sr")
+    lstm_ok  = MDL.get("lstm_ok");  rf_ok = MDL.get("rf_ok")
 
-        df   = df.sort_values("tanggal").reset_index(drop=True)
-        data = df["tinggi_air"].values.astype(float)
-        tanggal = pd.to_datetime(df["tanggal"])
+    # ── Cari file data — prioritas: Daily > Clean ──
+    candidates = [
+        "data/Data_Final_Manggarai_Daily.csv",
+        "data/Data_Final_Manggarai_Clean.csv",
+    ]
+    csv_path = next((p for p in candidates if os.path.exists(p)), None)
+
+    try:
+        if csv_path is None:
+            raise FileNotFoundError("Tidak ada file CSV di folder data/")
+
+        # Baca dengan berbagai format (index tanggal atau kolom tanggal)
+        df_raw = pd.read_csv(csv_path)
+        # Deteksi kolom tanggal
+        date_col = next((c for c in df_raw.columns
+                         if c.lower() in ("tanggal","date","datetime","index","waktu")), None)
+        if date_col:
+            df_raw[date_col] = pd.to_datetime(df_raw[date_col])
+            df_raw = df_raw.sort_values(date_col).reset_index(drop=True)
+            tanggal = df_raw[date_col]
+        else:
+            # Coba index
+            df_raw.index = pd.to_datetime(df_raw.index)
+            df_raw = df_raw.sort_index()
+            tanggal = df_raw.index.to_series().reset_index(drop=True)
+
+        # Pilih kolom target — ikuti MDL["col_target"]
+        if COL in df_raw.columns:
+            data = df_raw[COL].values.astype(float)
+        elif "tma_mean" in df_raw.columns:
+            data = df_raw["tma_mean"].values.astype(float)
+        elif "tinggi_air" in df_raw.columns:
+            data = df_raw["tinggi_air"].values.astype(float)
+        else:
+            raise ValueError(f"Kolom '{COL}' tidak ditemukan. Kolom ada: {list(df_raw.columns)}")
+
         file_ok = True
 
-        # Buat window sliding (24 input, 6 step ahead) — identik dengan notebook
-        WINDOW, FORECAST = 24, 6
-        sl = MDL.get("sl"); sr = MDL.get("sr")
-        lstm_ok = MDL.get("lstm_ok"); rf_ok = MDL.get("rf_ok")
-
+        # ── Scale & buat semua window (seluruh dataset) ──
         scaled = sl.transform(data.reshape(-1,1)).flatten() if sl else data / 1000.0
 
-        # PENTING: model dilatih pada 80% data pertama (train_data),
-        # sehingga evaluasi yang valid (sesuai RMSE/MAE/R2 resmi)
-        # HANYA pada 20% data terakhir (test set), bukan seluruh dataset.
-        train_size = int(len(scaled) * 0.8)
-
-        X, y_idx = [], []
+        X_all, y_idx_all = [], []
         for i in range(len(scaled) - WINDOW - FORECAST + 1):
-            # window dianggap "test" hanya jika seluruh window (input + target)
-            # berada di area test_data, mengikuti train_test_split notebook
-            if i >= train_size:
-                X.append(scaled[i:i+WINDOW])
-                y_idx.append(i + WINDOW + FORECAST - 1)
+            X_all.append(scaled[i:i+WINDOW])
+            y_idx_all.append(i + WINDOW + FORECAST - 1)
 
-        X      = np.array(X)
-        y_real = data[y_idx]
-        t_real = tanggal.iloc[y_idx].values
+        X_all    = np.array(X_all)
+        y_all    = data[y_idx_all]
+        t_all    = pd.to_datetime(tanggal.values[y_idx_all])
 
-        # Subsample agar ringan: max 600 titik per tahun
-        df_tmp = pd.DataFrame({"t": t_real, "actual": y_real})
-        df_tmp["year"] = pd.to_datetime(df_tmp["t"]).dt.year
-        df_tmp["idx_orig"] = np.arange(len(df_tmp))
+        # ── Split 80/20 sesuai notebook — evaluasi HANYA test set ──
+        # Tapi untuk GRAFIK tampilkan seluruh data agar informatif
+        n_total   = len(X_all)
+        train_end = int(n_total * 0.8)  # indeks akhir train
 
+        df_all = pd.DataFrame({"t": t_all, "actual": y_all,
+                                "is_test": np.arange(n_total) >= train_end})
+        df_all["year"] = t_all.year
+        df_all["idx"]  = np.arange(n_total)
+
+        # ── Jalankan prediksi untuk seluruh data (train+test) sekaligus ──
+        preds_l_all = np.full(n_total, np.nan)
+        preds_r_all = np.full(n_total, np.nan)
+
+        if lstm_ok and sl:
+            X3d = X_all.reshape(n_total, WINDOW, 1)
+            raw = MDL["lstm"].predict(X3d, verbose=0, batch_size=64).flatten()
+            preds_l_all = sl.inverse_transform(raw.reshape(-1,1)).flatten()
+
+        if rf_ok and sr:
+            raw = MDL["rf"].predict(X_all)
+            preds_r_all = sr.inverse_transform(raw.reshape(-1,1)).flatten()
+
+        preds_l_all = np.clip(preds_l_all, 0, 1500)
+        preds_r_all = np.clip(preds_r_all, 0, 1500)
+
+        # ── Split per tahun ──
         for yr in [2016,2017,2018,2019,2020]:
-            sub = df_tmp[df_tmp["year"] == yr]
-            if len(sub) < 30:
-                # Tahun ini tidak punya data di test set (model dilatih
-                # di sini) -> tampilkan sebagai simulasi, bukan evaluasi nyata
-                result[yr] = _fallback_year(
-                    yr, err="Tahun ini termasuk data training, "
-                            "bukan data uji — ditampilkan sebagai simulasi."
-                )
+            sub = df_all[df_all["year"] == yr].copy()
+            if len(sub) < 5:
+                result[yr] = _fallback_year(yr, "Tidak cukup data untuk tahun ini.")
                 continue
 
-            # Subsample max 500 titik
-            step = max(1, len(sub)//500)
-            sub  = sub.iloc[::step].reset_index(drop=True)
-            idxs = sub["idx_orig"].values
-            X_yr = X[idxs]
+            idxs   = sub["idx"].values
+            actual = np.clip(y_all[idxs], 0, 1500)
+            pl     = preds_l_all[idxs]
+            pr     = preds_r_all[idxs]
 
-            preds_l = np.full(len(X_yr), np.nan)
-            preds_r = np.full(len(X_yr), np.nan)
-
-            if lstm_ok:
-                X3d = X_yr.reshape(len(X_yr), WINDOW, 1)
-                raw = MDL["lstm"].predict(X3d, verbose=0).flatten()
-                preds_l = sl.inverse_transform(raw.reshape(-1,1)).flatten()
-
-            if rf_ok:
-                raw = MDL["rf"].predict(X_yr)
-                preds_r = sr.inverse_transform(raw.reshape(-1,1)).flatten()
-
-            actual = sub["actual"].values
-            # Clip nilai absurd (di luar range fisik wajar TMA Manggarai: 0-1000 cm)
-            preds_l = np.clip(preds_l, 0, 1500)
-            preds_r = np.clip(preds_r, 0, 1500)
-            actual  = np.clip(actual,  0, 1500)
-
-            # Tandai outlier sensor: lonjakan/penurunan >150 cm dalam 1 jam
-            # lalu kembali normal dalam 1-2 jam (pola flat-line + glitch).
-            # Tidak dihapus dari data, hanya ditandai untuk transparansi.
+            # Outlier: lonjakan besar antar hari (threshold lebih longgar untuk data harian)
+            threshold = 50 if MDL.get("is_daily") else 150
             is_outlier = np.zeros(len(actual), dtype=bool)
             if len(actual) > 2:
                 jump = np.abs(np.diff(actual, prepend=actual[0]))
-                is_outlier = jump > 150
+                is_outlier = jump > threshold
 
             result[yr] = {
-                "actual": actual,
-                "lstm"  : preds_l,
-                "rf"    : preds_r,
-                "dates" : pd.to_datetime(sub["t"].values),
-                "n"     : len(actual),
-                "ok"    : True,
+                "actual"    : actual,
+                "lstm"      : pl,
+                "rf"        : pr,
+                "dates"     : pd.to_datetime(sub["t"].values),
+                "n"         : len(actual),
+                "ok"        : True,
+                "is_test"   : sub["is_test"].values,  # True = test set
                 "is_outlier": is_outlier,
             }
 
     except Exception as e:
-        err = str(e)
         for yr in [2016,2017,2018,2019,2020]:
-            result[yr] = _fallback_year(yr, err)
+            result[yr] = _fallback_year(yr, str(e))
 
     return result, file_ok
 
@@ -324,7 +492,8 @@ def _fallback_year(yr, err=""):
     pred_r = base * EVAL["RF"]["R2"]   + mean_b*(1-EVAL["RF"]["R2"])   + noise_r
 
     start = pd.Timestamp(f"{yr}-01-01")
-    dates = pd.date_range(start, periods=n, freq="6h")
+    freq  = "D" if MDL.get("is_daily") else "6h"
+    dates = pd.date_range(start, periods=n, freq=freq)
     return {
         "actual": np.clip(base,   0, 1500),
         "lstm"  : np.clip(pred_l, 0, 1500),
@@ -342,6 +511,11 @@ EVAL_DATA, DATA_FILE_OK = get_eval_data()
 panel_col, main_col = st.columns([1, 4], gap="small")
 
 with panel_col:
+    # 1. BUNGKUSAN AWAL UNTUK BIKIN PANEL KIRI FIXED/STICKY PAS DI-SCROLL
+    st.markdown(f"""
+    <div style="position: sticky; top: 1rem; z-index: 99; max-height: 95vh; overflow-y: auto; padding-right: 5px;">
+    """, unsafe_allow_html=True)
+    
     st.markdown(f"""
     <div style="padding:.5rem .8rem 0;">
     <div style="display:flex;align-items:center;gap:8px;padding:.5rem 0 .6rem;
@@ -355,16 +529,15 @@ with panel_col:
     """, unsafe_allow_html=True)
 
     with st.container():
-        st.markdown("<div style='padding:0 .8rem'>", unsafe_allow_html=True)
-        b1, b2 = st.columns(2)
-        if b1.button("☀️ Terang" if D else "🌙 Gelap", key="theme",
-                     use_container_width=True, type="primary"):
-            st.session_state.dark = not D; st.rerun()
-        if b2.button("🔄 Reset", key="reset",
-                     use_container_width=True, type="primary"):
+        if st.button(
+            "🔄 Reset",
+            key="reset",
+            use_container_width=True,
+            type="primary"
+        ):
             st.session_state.result = None
-            st.session_state.page   = "Beranda"; st.rerun()
-        st.markdown("</div>", unsafe_allow_html=True)
+            st.session_state.page = "Beranda"
+            st.rerun()
 
     st.markdown(f'<div style="padding:0 .8rem"><div class="pcap">📥 Sumber Data TMA</div></div>',
                 unsafe_allow_html=True)
@@ -404,6 +577,9 @@ with panel_col:
     st.markdown("<hr/>", unsafe_allow_html=True)
     run = st.button("▶ Jalankan Analisis", type="primary",
                     use_container_width=True, key="run")
+
+    # 2. PENUTUP DIV STICKY (WAJIB ADA BIAR LAYOUT KAGAK PECAH)
+    st.markdown("</div>", unsafe_allow_html=True)
 
 # ── PROSES ────────────────────────────────────────────────────────────────
 res = st.session_state.result
@@ -480,6 +656,7 @@ with main_col:
     """, unsafe_allow_html=True)
 
     # Clock
+    # Clock
     components.html("""<script>
     function tick(){
         var n=new Date(),
@@ -493,6 +670,14 @@ with main_col:
             de=pd.getElementById('sipma-date');
         if(ce) ce.textContent=h+':'+m+':'+s;
         if(de) de.textContent=dt;
+        
+        // Bersihkan teks </div> liar yang dihasilkan karena manipulasi DOM parent
+        var spans = pd.querySelectorAll('span');
+        spans.forEach(function(span) {
+            if(span.textContent.trim() === '</div>') {
+                span.style.display = 'none';
+            }
+        });
     }
     tick(); setInterval(tick,1000);
     </script>""", height=0)
@@ -509,12 +694,19 @@ with main_col:
         for i in range(len(PAGES))
     )
     st.markdown(f"<style>{_nav_css}</style>", unsafe_allow_html=True)
-    st.markdown("<div style='padding:0 1rem;'>", unsafe_allow_html=True)
-    nav = st.columns(len(PAGES))
-    for i, (col, lbl) in enumerate(zip(nav, PAGES)):
-        if col.button(f"{ICONS[i]} {lbl}", key=f"nav{i}", use_container_width=True):
-            st.session_state.page = lbl; st.rerun()
-    st.markdown("</div>", unsafe_allow_html=True)
+    nav_container = st.container()
+
+    with nav_container:
+        nav = st.columns(len(PAGES))
+
+        for i, (col, lbl) in enumerate(zip(nav, PAGES)):
+            if col.button(
+                f"{ICONS[i]} {lbl}",
+                key=f"nav{i}",
+                use_container_width=True
+            ):
+                st.session_state.page = lbl
+                st.rerun()
     st.markdown(f"<hr style='margin:.3rem 1rem .6rem;'/>", unsafe_allow_html=True)
 
     # ── HELPERS ───────────────────────────────────────────────────────────
@@ -671,7 +863,6 @@ with main_col:
 
     # ── PADDING WRAPPER ───────────────────────────────────────────────────
     page = st.session_state.page
-    st.markdown("<div style='padding:0 1rem;'>", unsafe_allow_html=True)
 
     # ══════════════════════════════════════════════════════════════════════
     # BERANDA
@@ -771,19 +962,28 @@ with main_col:
 
         # Status data
         n_ok = sum(1 for d in EVAL_DATA.values() if d.get("ok"))
+        is_daily = MDL.get("is_daily", False)
+        data_type = "harian (tma_mean)" if is_daily else "per jam (tinggi_air)"
+        model_l = MDL.get("lstm_file","model_lstm_manggarai.h5")
+        model_r = MDL.get("rf_file","model_rf_manggarai.sav")
+
         if DATA_FILE_OK and n_ok >= 1:
-            tahun_nyata = [yr for yr,d in EVAL_DATA.items() if d.get("ok")]
             st.success(
-                f"✅ Evaluasi nyata dari test set model (Februari–Desember {min(tahun_nyata)}). "
-                f"Tahun lain ({', '.join(str(y) for y in [2016,2017,2018,2019,2020] if y not in tahun_nyata)}) "
-                f"adalah data training — ditampilkan sebagai simulasi referensi, bukan evaluasi resmi."
+                f"✅ Data & model berhasil dimuat. Model aktif: **{model_l}** & **{model_r}**. "
+                f"Data {data_type}, window {MDL.get('window',24)} titik → prediksi t+{MDL.get('forecast',6)}."
             )
         elif DATA_FILE_OK:
-            st.warning("⚠️ File ditemukan tapi tidak ada data pada test set (≥80% data).")
+            st.success(
+                f"✅ Model aktif: **{model_l}** & **{model_r}** ({data_type}). "
+                f"Grafik menampilkan prediksi pada seluruh dataset."
+            )
         else:
-            st.info("ℹ️ File `data/Data_Final_Manggarai_Clean.csv` tidak ditemukan — "
-                    "grafik menggunakan simulasi dengan distribusi error sesuai RMSE aktual. "
-                    "Letakkan file CSV di folder `data/` untuk prediksi nyata.")
+            st.info(
+                f"ℹ️ File CSV tidak ditemukan di folder `data/`. "
+                f"Model aktif: **{model_l}** & **{model_r}**. "
+                f"Grafik menggunakan simulasi. Letakkan `Data_Final_Manggarai_Daily.csv` "
+                f"atau `Data_Final_Manggarai_Clean.csv` di folder `data/` untuk grafik nyata."
+            )
 
         # Metrik ringkasan
         c1,c2,c3,c4,c5,c6 = st.columns(6)
@@ -796,7 +996,6 @@ with main_col:
 
         st.markdown("<div style='margin:.5rem 0;'>", unsafe_allow_html=True)
         eval_table()
-        st.markdown("</div>", unsafe_allow_html=True)
         st.divider()
 
         # ── Filter tahun ──────────────────────────────────────────────────
@@ -1159,4 +1358,4 @@ with main_col:
             st.divider()
             export_btns(res)
 
-    st.markdown("</div>", unsafe_allow_html=True)
+    
