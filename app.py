@@ -232,29 +232,48 @@ def _load_history_from_localstorage():
     """, height=0)
     
 # ── KONSTANTA — baca dari meta.json jika ada, fallback ke default ──────────
+# ── KONSTANTA — baca dari meta.json jika ada, fallback ke default ──────────
+def _find_eval_json_path():
+    """Cari model_evaluation.json di beberapa lokasi umum, supaya app.py tetap
+    nemu filenya berapapun folder tempat `streamlit run app.py` dieksekusi
+    (root project ATAU dari dalam folder notebook/ dsb). Notebook LSTM/RF
+    kalian nulis file itu relatif ke cwd notebook (biasanya .../notebook/),
+    sedangkan Streamlit App bisa dijalankan dari folder root — makanya app.py
+    perlu cari di beberapa kandidat, bukan cuma 1 path tetap."""
+    import os
+    here = os.path.dirname(os.path.abspath(__file__))
+    candidates = [
+        "model_evaluation.json",                                  # cwd saat ini
+        os.path.join("notebook", "model_evaluation.json"),        # cwd/notebook/
+        os.path.join(here, "model_evaluation.json"),               # sebelah app.py
+        os.path.join(here, "notebook", "model_evaluation.json"),   # app.py/notebook/
+        os.path.join(here, "..", "notebook", "model_evaluation.json"),
+    ]
+    for c in candidates:
+        if os.path.exists(c):
+            return c
+    return "model_evaluation.json"  # default lama, biar behavior lama tetap ada kalau semua gagal
+
 def _load_eval_meta():
-    """
-    Baca metrics dari models/meta.json yang disimpan notebook.
-    Format meta.json:
-    {
-      "LSTM": {"RMSE": ..., "MAE": ..., "R2": ...},
-      "RF":   {"RMSE": ..., "MAE": ..., "R2": ...}
-    }
-    Jika tidak ada, pakai nilai terakhir dari notebook.
-    """
-    meta_path = "models/meta.json"
-    if os.path.exists(meta_path):
+    import json
+    import os
+    
+    json_path = _find_eval_json_path()
+    
+    # Kalau file JSON hasil run notebook ada, murni ambil dari sana otomatis
+    if os.path.exists(json_path):
         try:
-            import json
-            with open(meta_path) as f:
-                meta = json.load(f)
-            if "LSTM" in meta and "RF" in meta:
-                return meta
-        except: pass
-    # Fallback: nilai dari notebook terbaru (daily, tma_mean)
+            with open(json_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                if "LSTM" in data and "RF" in data:
+                    return data
+        except:
+            pass
+            
+    # Ini cuma cadangan (fallback) seandainya file JSON-nya kehapus
     return {
-        "LSTM": {"RMSE": 31.71, "MAE": 23.05, "R2": 0.5200},
-        "RF"  : {"RMSE": 42.77, "MAE": 30.56, "R2": 0.3120},
+        "LSTM": {"RMSE": 31.9083, "MAE": 24.0038, "R2": 0.5210},
+        "RF"  : {"RMSE": 42.7675, "MAE": 30.5590, "R2": 0.3120},
     }
 
 EVAL = _load_eval_meta()
@@ -301,59 +320,130 @@ def _read_model_meta(path):
 @st.cache_resource(show_spinner="Memuat model…")
 def load_models():
     m = {}
-    # ── LSTM: cari .h5 terbaru ──
-    lstm_path = _latest("models/*.h5")
-    scaler_lstm = _latest("models/scaler_tma*.sav") or _latest("models/scaler_tma_daily*.sav")
+
+    # ── Prioritas file: versi _daily lebih diutamakan dari versi lama ──
+    # Urutan list: spesifik dulu, fallback belakangan
+    def _pick_first_exists(paths):
+        """Kembalikan path pertama yang benar-benar ada di disk."""
+        for p in paths:
+            if os.path.exists(p):
+                return p
+        return None
+
+    # ── LSTM: wajib pakai model & scaler versi harian (daily) ──
+    lstm_path = _pick_first_exists([
+        "models/model_lstm_manggarai_daily.h5",
+        "models/model_lstm_manggarai.h5",
+    ])
+    scaler_lstm = _pick_first_exists([
+        "models/scaler_tma_daily.sav",
+        "models/scaler_tma.sav",
+    ])
+
     if lstm_path and scaler_lstm:
         try:
-            m["lstm"]    = load_model(lstm_path, compile=False)
-            m["sl"]      = joblib.load(scaler_lstm)
-            m["lstm_ok"] = True
+            m["lstm"]     = load_model(lstm_path, compile=False)
+            m["sl"]       = joblib.load(scaler_lstm)
+            m["lstm_ok"]  = True
             m["lstm_file"]= os.path.basename(lstm_path)
         except Exception as e:
             m["lstm_ok"] = False; m["lstm_err"] = str(e)
     else:
         m["lstm_ok"] = False
-        m["lstm_err"] = f"Tidak ada .h5 atau scaler di folder models/ (dicari: {lstm_path}, {scaler_lstm})"
+        m["lstm_err"] = (
+            f"Tidak menemukan model/scaler LSTM. "
+            f"Pastikan 'models/model_lstm_manggarai_daily.h5' dan "
+            f"'models/scaler_tma_daily.sav' ada di folder models/."
+        )
 
-    # ── RF: cari .sav terbaru yang mengandung 'rf' tapi BUKAN scaler ──
-    def _latest_rf_model(pattern_model, pattern_scaler):
-        """Cari file RF model (exclude file scaler)."""
-        all_sav = glob.glob("models/*.sav")
-        # Model RF: mengandung 'rf' tapi BUKAN 'scaler'
-        rf_candidates = [f for f in all_sav
-                         if "rf" in os.path.basename(f).lower()
-                         and "scaler" not in os.path.basename(f).lower()]
-        return max(rf_candidates, key=os.path.getmtime) if rf_candidates else None
+    # ── RF: wajib pakai model & scaler versi harian (daily) ──
+    rf_path = _pick_first_exists([
+        "models/model_rf_manggarai_daily.sav",
+        "models/model_rf_manggarai.sav",
+    ])
+    scaler_rf = _pick_first_exists([
+        "models/scaler_rf_daily.sav",
+        "models/scaler_rf.sav",
+    ])
 
-    rf_path   = _latest_rf_model("models/*rf*.sav", "models/scaler_rf*.sav")
-    scaler_rf = _latest("models/scaler_rf*.sav")
-
-    # Fallback: jika tidak ada scaler_rf khusus, coba pakai scaler LSTM (scaler_tma)
-    if rf_path and not scaler_rf:
-        scaler_rf = _latest("models/scaler_tma*.sav") or _latest("models/scaler_tma_daily*.sav")
-
-    if rf_path:
+    if rf_path and scaler_rf:
         try:
             m["rf"]     = joblib.load(rf_path)
-            m["sr"]     = joblib.load(scaler_rf) if scaler_rf else m.get("sl")
+            m["sr"]     = joblib.load(scaler_rf)
             m["rf_ok"]  = True
             m["rf_file"]= os.path.basename(rf_path)
-            m["rf_uses_lstm_scaler"] = (scaler_rf is None)  # flag untuk pred_rf
         except Exception as e:
             m["rf_ok"] = False; m["rf_err"] = str(e)
     else:
         m["rf_ok"] = False
-        m["rf_err"] = f"Tidak ada model RF di folder models/ — file .sav yang ditemukan: {glob.glob('models/*.sav')}"
+        m["rf_err"] = (
+            f"Tidak menemukan model/scaler RF. "
+            f"Pastikan 'models/model_rf_manggarai_daily.sav' dan "
+            f"'models/scaler_rf_daily.sav' ada di folder models/."
+        )
 
-    # ── Deteksi window & kolom dari nama file ──
-    lstm_name = m.get("lstm_file", "")
-    m["is_daily"]  = "daily" in lstm_name.lower()
-    m["window"]    = 24
-    m["forecast"]  = 6
-    m["col_target"]= "tma_mean" if m["is_daily"] else "tinggi_air"
+    # ── Selalu daily: data harian (tma_mean), window 24 hari, prediksi t+6 ──
+    m["is_daily"]   = True
+    m["window"]     = 24
+    m["forecast"]   = 6
+    m["col_target"] = "tma_mean"
 
     return m
+
+def parse_tma_file(file_bytes, filename):
+    """Baca CSV/Excel apa pun kondisinya -> DataFrame bersih (kolom terpisah benar)."""
+    fname = filename.lower()
+    if fname.endswith(("xlsx", "xls")):
+        engine = "openpyxl" if fname.endswith("xlsx") else "xlrd"
+        df = pd.read_excel(io.BytesIO(file_bytes), engine=engine)
+        df.columns = [str(c).strip() for c in df.columns]
+        return df
+
+    df = None
+    for sep in [",", ";", "\t", "|"]:
+        try:
+            cand = pd.read_csv(io.BytesIO(file_bytes), sep=sep, engine="python")
+            cand.columns = [str(c).strip() for c in cand.columns]
+            # valid kalau >1 kolom & tak ada nama kolom yg masih mengandung delimiter lain
+            if cand.shape[1] > 1 and not any(
+                any(d in str(c) for d in [",", ";", "\t", "|"]) for c in cand.columns):
+                df = cand; break
+        except Exception:
+            pass
+
+    if df is None:  # fallback: baris ter-quote penuh (mis. "tgl;nilai")
+        text = file_bytes.decode("utf-8", errors="replace")
+        lines = [ln.strip().strip('"').strip("'") for ln in text.splitlines() if ln.strip()]
+        if lines:
+            best_sep, best_count = None, 0
+            for sep in [";", ",", "\t", "|"]:
+                counts = [ln.count(sep) for ln in lines]
+                if len(set(counts)) == 1 and counts[0] > 0 and counts[0] > best_count:
+                    best_sep, best_count = sep, counts[0]
+            if best_sep:
+                rows = [ln.split(best_sep) for ln in lines]
+                header, data_rows = rows[0], rows[1:]
+                header = [h.strip().strip('"').strip("'") for h in header]
+                df = pd.DataFrame(data_rows, columns=header)
+    return df
+
+
+def extract_series_and_date(df):
+    """Dari DataFrame bersih -> (array nilai TMA, tanggal terakhir/None). Satu sumber kebenaran."""
+    if df is None or df.empty:
+        return None, None
+    date_col = next((c for c in df.columns
+                      if str(c).lower() in ("tanggal","date","datetime","waktu","index","time")), None)
+    candidates = [c for c in df.columns if c != date_col] if date_col else list(df.columns)
+    df_num = df[candidates].apply(pd.to_numeric, errors="coerce")
+    good = df_num.count(); good = good[good > 0]
+    vals = df_num[good.idxmax()].dropna().values if len(good) else None
+    last_date = None
+    if date_col is not None:
+        pd_dates = pd.to_datetime(df[date_col], errors="coerce").dropna()
+        if len(pd_dates):
+            last_date = pd_dates.iloc[-1]
+    return vals, last_date
 
 MDL = load_models()
 
@@ -379,155 +469,153 @@ def pred_lstm(arr):
 def pred_rf(arr):
     if not MDL.get("rf_ok"): return None
     try:
-        sc_out = MDL["sl"]              # scaler target — selalu ada jika LSTM ok
-        sc_in  = MDL.get("sr") or sc_out  # scaler input RF; fallback ke sl
-        flat   = arr.flatten().reshape(1, -1)  # (1, 24)
-        n_feat = sc_in.n_features_in_ if hasattr(sc_in, "n_features_in_") else 1
-        if n_feat == 1:
-            # scaler hanya 1 fitur → scale tiap nilai via sl, flatten jadi 24 fitur
-            scaled_flat = sc_out.transform(arr).flatten().reshape(1, -1)
-        else:
-            scaled_flat = sc_in.transform(flat)
+        sr = MDL.get("sr")   # scaler_rf_daily.sav — MinMaxScaler(feature_range=(0,1)), fit pada tma_mean
+        # Sesuai notebook RF: scale tiap nilai dengan sr, bentuk window (1, 24), predict, inverse
+        scaled_flat = sr.transform(arr).flatten().reshape(1, -1)  # (1, 24)
         raw_p = MDL["rf"].predict(scaled_flat)
-        # Selalu inverse dengan scaler target (sl)
-        return inv(sc_out, float(raw_p[0]))
+        r = float(sr.inverse_transform([[raw_p[0]]])[0][0])
+        if r > 2000: r /= 10.0
+        return None if (r < 0 or r > 2000) else r
     except Exception:
         return None
 
 # ── DATA EVALUASI — auto mengikuti model & data terbaru ────────────────────
-@st.cache_data(show_spinner="Memuat data evaluasi…")
-def get_eval_data():
-    """
-    Baca file CSV data (Daily atau Clean), bentuk window sesuai MDL["window"],
-    jalankan model LSTM & RF. Otomatis mengikuti model terbaru yang diload.
-    """
-    result  = {}
-    file_ok = False
+def _eval_json_cache_key(json_path):
+    """Kunci cache berbasis mtime+ukuran file, biar cache Streamlit otomatis
+    basi (auto-invalidate) begitu model_evaluation.json ditulis ulang oleh
+    notebook — tanpa perlu klik 'Clear cache' manual tiap kali retrain model."""
+    try:
+        st_ = os.stat(json_path)
+        return (json_path, st_.st_mtime_ns, st_.st_size)
+    except FileNotFoundError:
+        return (json_path, None, None)
 
-    WINDOW   = MDL.get("window",    24)
-    FORECAST = MDL.get("forecast",  6)
-    COL      = MDL.get("col_target","tma_mean")
-    sl       = MDL.get("sl");  sr  = MDL.get("sr")
-    lstm_ok  = MDL.get("lstm_ok");  rf_ok = MDL.get("rf_ok")
+@st.cache_data(show_spinner="Memuat data evaluasi murni dari notebook…")
+def _get_eval_data_cached(_cache_key):
+    import json
+    result = {}
+    json_path = _find_eval_json_path()
 
-    # ── Cari file data — prioritas: Daily > Clean ──
-    candidates = [
-        "data/Data_Final_Manggarai_Daily.csv",
-        "data/Data_Final_Manggarai_Clean.csv",
-    ]
-    csv_path = next((p for p in candidates if os.path.exists(p)), None)
+    # Inisialisasi default pake generator musiman — HANYA dipakai sebagai
+    # fallback kalau model_evaluation.json belum ada / rusak / kosong.
+    for yr in [2016, 2017, 2018, 2019, 2020]:
+        result[yr] = _fallback_year(yr, "model_evaluation.json tidak ditemukan / tidak valid — memakai data simulasi.")
+
+    if not os.path.exists(json_path):
+        return result, False
 
     try:
-        if csv_path is None:
-            raise FileNotFoundError("Tidak ada file CSV di folder data/")
+        with open(json_path, "r", encoding="utf-8") as f:
+            raw_meta = json.load(f)
 
-        # Baca dengan berbagai format (index tanggal atau kolom tanggal)
-        df_raw = pd.read_csv(csv_path)
-        # Deteksi kolom tanggal
-        date_col = next((c for c in df_raw.columns
-                         if c.lower() in ("tanggal","date","datetime","index","waktu")), None)
-        if date_col:
-            df_raw[date_col] = pd.to_datetime(df_raw[date_col])
-            df_raw = df_raw.sort_values(date_col).reset_index(drop=True)
-            tanggal = df_raw[date_col]
-        else:
-            # Coba index
-            df_raw.index = pd.to_datetime(df_raw.index)
-            df_raw = df_raw.sort_index()
-            tanggal = df_raw.index.to_series().reset_index(drop=True)
+        lstm_d = raw_meta.get("LSTM", {}) or {}
+        rf_d   = raw_meta.get("RF", {}) or {}
 
-        # Pilih kolom target — ikuti MDL["col_target"]
-        if COL in df_raw.columns:
-            data = df_raw[COL].values.astype(float)
-        elif "tma_mean" in df_raw.columns:
-            data = df_raw["tma_mean"].values.astype(float)
-        elif "tinggi_air" in df_raw.columns:
-            data = df_raw["tinggi_air"].values.astype(float)
-        else:
-            raise ValueError(f"Kolom '{COL}' tidak ditemukan. Kolom ada: {list(df_raw.columns)}")
+        # Series per model, masing-masing di-index pakai tanggalnya sendiri lalu
+        # di-outer-join. Ini memperbaiki bug lama: sebelumnya kalau array LSTM
+        # kosong ([]), seluruh data (termasuk RF yang valid) ikut terbuang karena
+        # dict.get(key, default) tidak fallback untuk value kosong, hanya utk key
+        # yang hilang. Sekarang tiap model independen — kalau salah satu model
+        # datanya kosong, model yang lain tetap tampil dari data notebook asli.
+        def _series(d, val_key, dates_key="dates"):
+            dates = d.get(dates_key) or []
+            vals  = d.get(val_key) or []
+            if not dates or len(dates) != len(vals):
+                return pd.Series(dtype=float)
+            idx = pd.to_datetime(dates)
+            return pd.Series(vals, index=idx, dtype=float)
 
-        file_ok = True
+        s_actual_l = _series(lstm_d, "actual")
+        s_actual_r = _series(rf_d, "actual")
+        s_lstm     = _series(lstm_d, "pred")
+        s_rf       = _series(rf_d, "pred")
 
-        # ── Scale & buat semua window (seluruh dataset) ──
-        scaled = sl.transform(data.reshape(-1,1)).flatten() if sl else data / 1000.0
+        # "actual" gabungan HANYA dipakai untuk garis actual di chart (union kedua
+        # test-set, sekadar visual). Untuk hitungan metrik tiap model WAJIB pakai
+        # actual_lstm / actual_rf masing-masing (lihat blok tabel per tahun di bawah),
+        # supaya LSTM tidak pernah dibandingkan dengan actual milik test-set RF, dst.
+        s_actual = s_actual_l.combine_first(s_actual_r)
 
-        X_all, y_idx_all = [], []
-        for i in range(len(scaled) - WINDOW - FORECAST + 1):
-            X_all.append(scaled[i:i+WINDOW])
-            y_idx_all.append(i + WINDOW + FORECAST - 1)
+        df_murni = pd.DataFrame({
+            "actual"     : s_actual,
+            "actual_lstm": s_actual_l,
+            "actual_rf"  : s_actual_r,
+            "lstm"       : s_lstm,
+            "rf"         : s_rf,
+        })
+        df_murni = df_murni.dropna(how="all", subset=["lstm", "rf"])
 
-        X_all    = np.array(X_all)
-        y_all    = data[y_idx_all]
-        t_all    = pd.to_datetime(tanggal.values[y_idx_all])
+        # Data TRAIN (in-sample) — dipakai HANYA sebagai cadangan utk tahun yang
+        # tidak tercakup test-set sama sekali (mis. split 80/20 bikin test cuma
+        # jatuh di 2020). Ini data asli dari notebook (bukan simulasi), cuma
+        # sifatnya in-sample sehingga ditandai Fase "Latih (Train)" di tabel.
+        s_actual_l_tr = _series(lstm_d, "train_actual", "train_dates")
+        s_actual_r_tr = _series(rf_d,   "train_actual", "train_dates")
+        s_lstm_tr     = _series(lstm_d, "train_pred",   "train_dates")
+        s_rf_tr       = _series(rf_d,   "train_pred",   "train_dates")
+        s_actual_tr   = s_actual_l_tr.combine_first(s_actual_r_tr)
 
-        # ── Split 80/20 sesuai notebook — evaluasi HANYA test set ──
-        # Tapi untuk GRAFIK tampilkan seluruh data agar informatif
-        n_total   = len(X_all)
-        train_end = int(n_total * 0.8)  # indeks akhir train
+        df_latih = pd.DataFrame({
+            "actual"     : s_actual_tr,
+            "actual_lstm": s_actual_l_tr,
+            "actual_rf"  : s_actual_r_tr,
+            "lstm"       : s_lstm_tr,
+            "rf"         : s_rf_tr,
+        })
+        df_latih = df_latih.dropna(how="all", subset=["lstm", "rf"])
+        if not df_latih.empty:
+            df_latih = df_latih.sort_index()
+            df_latih["year"] = df_latih.index.year
 
-        df_all = pd.DataFrame({"t": t_all, "actual": y_all,
-                                "is_test": np.arange(n_total) >= train_end})
-        df_all["year"] = t_all.year
-        df_all["idx"]  = np.arange(n_total)
+        if not df_murni.empty:
+            df_murni = df_murni.sort_index()
+            df_murni["year"] = df_murni.index.year
 
-        # ── Jalankan prediksi untuk seluruh data (train+test) sekaligus ──
-        preds_l_all = np.full(n_total, np.nan)
-        preds_r_all = np.full(n_total, np.nan)
-
-        if lstm_ok and sl:
-            X3d = X_all.reshape(n_total, WINDOW, 1)
-            raw = MDL["lstm"].predict(X3d, verbose=0, batch_size=64).flatten()
-            preds_l_all = sl.inverse_transform(raw.reshape(-1,1)).flatten()
-
-        if rf_ok and sr and sl:
-            # Deteksi apakah scaler RF di-fit 1-fitur atau 24-fitur
-            n_feat_rf = sr.n_features_in_ if hasattr(sr, "n_features_in_") else 1
-            if n_feat_rf == 1:
-                X_rf = sl.transform(X_all.reshape(-1,1)).reshape(n_total, -1)
-            else:
-                X_rf = sr.transform(X_all)
-            raw = MDL["rf"].predict(X_rf)
-            # Selalu inverse dengan sl (scaler target) agar satuan cm konsisten
-            preds_r_all = sl.inverse_transform(raw.reshape(-1,1)).flatten()
-
-        preds_l_all = np.clip(preds_l_all, 0, 1500)
-        preds_r_all = np.clip(preds_r_all, 0, 1500)
-
-        # ── Split per tahun ──
-        for yr in [2016,2017,2018,2019,2020]:
-            sub = df_all[df_all["year"] == yr].copy()
-            if len(sub) < 5:
-                result[yr] = _fallback_year(yr, "Tidak cukup data untuk tahun ini.")
-                continue
-
-            idxs   = sub["idx"].values
-            actual = np.clip(y_all[idxs], 0, 1500)
-            pl     = preds_l_all[idxs]
-            pr     = preds_r_all[idxs]
-
-            # Outlier: lonjakan besar antar hari (threshold lebih longgar untuk data harian)
-            threshold = 50 if MDL.get("is_daily") else 150
-            is_outlier = np.zeros(len(actual), dtype=bool)
-            if len(actual) > 2:
-                jump = np.abs(np.diff(actual, prepend=actual[0]))
-                is_outlier = jump > threshold
-
-            result[yr] = {
-                "actual"    : actual,
-                "lstm"      : pl,
-                "rf"        : pr,
-                "dates"     : pd.to_datetime(sub["t"].values),
-                "n"         : len(actual),
-                "ok"        : True,
-                "is_test"   : sub["is_test"].values,  # True = test set
-                "is_outlier": is_outlier,
-            }
+            found_any = False
+            for yr in [2016, 2017, 2018, 2019, 2020]:
+                sub = df_murni[df_murni["year"] == yr]
+                if len(sub) > 5:
+                    # Ada test-set asli utk tahun ini → out-of-sample, paling valid
+                    found_any = True
+                    result[yr] = {
+                        "actual": sub["actual"].values,
+                        "actual_lstm": sub["actual_lstm"].values,
+                        "actual_rf": sub["actual_rf"].values,
+                        "lstm": sub["lstm"].values,
+                        "rf": sub["rf"].values,
+                        "dates": sub.index.values,
+                        "n": len(sub),
+                        "ok": True,
+                        "fase": "test",
+                        "is_outlier": np.zeros(len(sub), dtype=bool),
+                    }
+                elif not df_latih.empty:
+                    sub_tr = df_latih[df_latih["year"] == yr]
+                    if len(sub_tr) > 5:
+                        # Tidak ada test-set di tahun ini → pakai data TRAIN asli
+                        # (in-sample, jujur ditandai "Latih (Train)"), bukan simulasi.
+                        found_any = True
+                        result[yr] = {
+                            "actual": sub_tr["actual"].values,
+                            "actual_lstm": sub_tr["actual_lstm"].values,
+                            "actual_rf": sub_tr["actual_rf"].values,
+                            "lstm": sub_tr["lstm"].values,
+                            "rf": sub_tr["rf"].values,
+                            "dates": sub_tr.index.values,
+                            "n": len(sub_tr),
+                            "ok": True,
+                            "fase": "train",
+                            "is_outlier": np.zeros(len(sub_tr), dtype=bool),
+                        }
+            return result, found_any
 
     except Exception as e:
-        for yr in [2016,2017,2018,2019,2020]:
-            result[yr] = _fallback_year(yr, str(e))
+        st.warning(f"Gagal membaca model_evaluation.json: {e}. Menampilkan data simulasi sementara.")
 
-    return result, file_ok
+    return result, False
+
+def get_eval_data():
+    return _get_eval_data_cached(_eval_json_cache_key(_find_eval_json_path()))
 
 def _fallback_year(yr, err=""):
     """Simulasi deterministik berbasis pola musiman Manggarai."""
@@ -608,57 +696,29 @@ with panel_col:
         if uploaded:
             try:
                 import re as _re
+                # SESUDAH
                 file_bytes = uploaded.read()
-                vals = None
+                df_clean = parse_tma_file(file_bytes, uploaded.name)
+                vals, file_last_date = extract_series_and_date(df_clean)
 
-                # ── Excel ──────────────────────────────────────────────
-                if uploaded.name.lower().endswith(("xlsx","xls")):
-                    engine = "openpyxl" if uploaded.name.lower().endswith("xlsx") else "xlrd"
-                    df_raw = pd.read_excel(io.BytesIO(file_bytes), engine=engine)
-                    df_num = df_raw.apply(pd.to_numeric, errors="coerce")
-                    good   = df_num.count(); good = good[good > 0]
-                    if len(good):
-                        vals = df_num[good.idxmax()].dropna().values
+                # Fallback terakhir kalau parser di atas tetap gagal total
+                if vals is None or len(vals) < 24:
+                    import re as _re
+                    text, numbers = file_bytes.decode("utf-8", errors="replace"), []
+                    for line in text.splitlines():
+                        line = line.strip().strip('"').strip("'")
+                        if not line or _re.match(r'^[a-zA-Z_]', line): continue
+                        parts = _re.split(r'[;,\t|]', line)
+                        for part in reversed(parts):
+                            part = part.strip().strip('"').strip("'")
+                            try:
+                                v = float(part.replace(",", "."))
+                                if 0 < v < 9999: numbers.append(v); break
+                            except ValueError: pass
+                    if len(numbers) >= 24:
+                        vals = np.array(numbers)
 
-                # ── CSV: coba berbagai separator ───────────────────────
-                else:
-                    for sep in [",", ";", "\t", "|"]:
-                        try:
-                            df_raw = pd.read_csv(io.BytesIO(file_bytes),
-                                                 sep=sep, engine="python")
-                            df_num = df_raw.apply(pd.to_numeric, errors="coerce")
-                            good   = df_num.count(); good = good[good >= 1]
-                            if len(good):
-                                cand = df_num[good.idxmax()].dropna().values
-                                if len(cand) >= 24:
-                                    vals = cand
-                                    break
-                        except Exception:
-                            pass
-
-                    # ── Fallback: ekstrak angka per baris (handle quoted CSV) ──
-                    if vals is None or len(vals) < 24:
-                        text    = file_bytes.decode("utf-8", errors="replace")
-                        numbers = []
-                        for line in text.splitlines():
-                            line = line.strip().strip('"').strip("'")
-                            if not line:
-                                continue
-                            # Lewati baris header
-                            if _re.match(r'^[a-zA-Z_]', line.lstrip('"').lstrip("'")):
-                                continue
-                            parts = _re.split(r'[;,\t|]', line)
-                            for part in reversed(parts):
-                                part = part.strip().strip('"').strip("'")
-                                try:
-                                    v = float(part.replace(",", "."))
-                                    if 0 < v < 9999:   # range angka wajar
-                                        numbers.append(v)
-                                        break
-                                except ValueError:
-                                    pass
-                        if len(numbers) >= 24:
-                            vals = np.array(numbers)
+                st.session_state["_uploaded_last_date"] = file_last_date  # simpan buat dipakai saat prediksi
 
                 # ── Validasi hasil ─────────────────────────────────────
                 if vals is None or len(vals) < 24:
@@ -703,24 +763,16 @@ if run:
             primary = r_l if r_l is not None else r_r
             sg      = get_siaga(primary)
             
-            # --- DETEKSI TANGGAL TERAKHIR DARI DATA YANG DIANALISIS ---
-            # Jika user upload file dan file tersebut punya kolom tanggal, ambil tanggal terakhirnya.
-            # Jika manual / tidak terdeteksi, fallback ke hari ini minus 1 hari agar seolah-olah data kemarin.
-            base_date_data = datetime.now()
-            if method == "Upload File" and uploaded:
-                try:
-                    uploaded.seek(0)
-                    if uploaded.name.lower().endswith(("xlsx","xls")):
-                        df_t = pd.read_excel(uploaded)
-                    else:
-                        df_t = pd.read_csv(uploaded, sep=None, engine="python")
-                    date_col = next((c for c in df_t.columns if c.lower() in ("tanggal","date","datetime","waktu")), None)
-                    if date_col:
-                        base_date_data = pd.to_datetime(df_t[date_col]).max()
-                except:
-                    pass
+            # SESUDAH — pakai tanggal yang sudah diambil sekali di Langkah 2, bukan re-parse
+            base_date_data = st.session_state.get("_uploaded_last_date") if method == "Upload File" else None
+            if base_date_data is None or pd.isna(base_date_data):
+                base_date_data = datetime.now() - pd.Timedelta(days=5)  # fallback utk input manual
             
-            # Ambil rincian kurva t+1 s/d t+6
+            # Jika manual atau parser gagal, gunakan tanggal hari ini minus 5 hari (biar seolah-olah data berakhir tgl 24 jika skrg tgl 29)
+            if base_date_data is None or pd.isna(base_date_data):
+                base_date_data = datetime.now() - pd.Timedelta(days=5)
+            
+            # Hitung rincian t+1 s/d t+6
             import hashlib
             def _get_curve_vals(target_val, seed_extra):
                 if target_val is None: return [None]*6
@@ -740,12 +792,15 @@ if run:
             st.session_state.result = dict(
                 arr=arr, last_cm=last_cm, lstm=r_l, rf=r_r, ts=ts, siaga=sg,
                 lstm_series=lstm_series, rf_series=rf_series,
-                base_date_data=base_date_data.strftime("%Y-%m-%d") # Kunci tanggal terakhir data ke state!
+                base_date_data=base_date_data.strftime("%Y-%m-%d")
             )
             
+            # KEMBALIKAN KEY SKALAR BIAR TABEL UTAMA RIWAYAT TIDAK KOSONG (—)
             st.session_state.history.append({
                 "Waktu"        : ts,
                 "TMA (cm)"     : round(last_cm, 1),
+                "LSTM t+6 hari (cm)": round(r_l, 2) if r_l else "—",
+                "RF t+6 hari (cm)"  : round(r_r, 2) if r_r else "—",
                 "Status"       : f"{sg['icon']} Siaga {sg['lvl']} · {sg['label']}",
                 "lstm_series"  : lstm_series,
                 "rf_series"    : rf_series
@@ -1128,11 +1183,17 @@ with main_col:
             empty()
         else:
             L, Rv, last, sg = res["lstm"], res["rf"], res["last_cm"], res["siaga"]
-            primary = L if L is not None else Rv
+            
+            # Tentukan model terbaik secara objektif berdasarkan nilai RMSE Terkecil dari Notebook
+            better = "LSTM" if EVAL["LSTM"]["RMSE"] < EVAL["RF"]["RMSE"] else "RF"
+            
             c1,c2,c3,c4 = st.columns(4)
             c1.metric("💧 TMA Saat Ini", f"{last:.1f} cm")
-            better_lbl = f"LSTM" if L is not None else "RF"
-            better_val = L if L is not None else Rv
+            
+            # KODE PERBAIKAN: Pastikan label dan nilai prediksi sinkron dengan model terbaik hasil evaluasi
+            better_lbl = better
+            better_val = L if better == "LSTM" else Rv
+            
             c2.metric(f"🏆 Prediksi Terbaik ({better_lbl})",
                       f"{better_val:.2f} cm" if better_val else "N/A",
                       delta=f"{better_val-last:+.2f} cm" if better_val else None,
@@ -1144,6 +1205,28 @@ with main_col:
                     )
             c4.metric(f"{sg['icon']} Status", f"Siaga {sg['lvl']}",
                       delta=sg["label"], delta_color="off")
+            # --- TAMBAHAN: Penjelasan kenapa model ini yang diunggulkan ---
+            rmse_diff = abs(EVAL["LSTM"]["RMSE"] - EVAL["RF"]["RMSE"])
+            pct_diff  = (rmse_diff / max(EVAL["RF"]["RMSE"], EVAL["LSTM"]["RMSE"])) * 100
+            menang_rmse = "LSTM" if EVAL["LSTM"]["RMSE"] < EVAL["RF"]["RMSE"] else "RF"
+            menang_mae  = "LSTM" if EVAL["LSTM"]["MAE"]  < EVAL["RF"]["MAE"]  else "RF"
+            menang_r2   = "LSTM" if EVAL["LSTM"]["R2"]   > EVAL["RF"]["R2"]   else "RF"
+            jml_menang  = sum([menang_rmse=="LSTM", menang_mae=="LSTM", menang_r2=="LSTM"])
+
+            st.markdown(f"""
+            <div class="card" style="margin:.6rem 0;">
+            <b style="font-size:.7rem;color:{MUTED};text-transform:uppercase;">
+                Kenapa {better_lbl} yang Direkomendasikan?</b>
+            <p style="font-size:.8rem;margin:.4rem 0 0;">
+                Berdasarkan evaluasi pada data historis (bukan data baru ini), <b>{better_lbl}</b>
+                unggul di <b>{jml_menang if better_lbl=="LSTM" else 3-jml_menang}/3 metrik error</b>:
+                RMSE {EVAL['LSTM']['RMSE']:.2f} vs {EVAL['RF']['RMSE']:.2f} cm,
+                MAE {EVAL['LSTM']['MAE']:.2f} vs {EVAL['RF']['MAE']:.2f} cm,
+                R² {EVAL['LSTM']['R2']:.4f} vs {EVAL['RF']['R2']:.4f}.
+                Selisih RMSE-nya sekitar <b>{pct_diff:.1f}%</b> lebih kecil dibanding model pembanding,
+                artinya rata-rata kesalahan prediksinya lebih rendah pada data uji historis Manggarai.
+            </p>
+            </div>""", unsafe_allow_html=True)
 
             st.markdown(f"<div style='font-size:.65rem;color:{MUTED};text-transform:uppercase;"
                         f"letter-spacing:.08em;margin:.8rem 0 .25rem;'>"
@@ -1161,7 +1244,7 @@ with main_col:
                 st.markdown(f"<div style='font-size:.65rem;color:{MUTED};text-transform:uppercase;"
                             f"letter-spacing:.08em;margin-bottom:.3rem;'>"
                             f"Status & Instruksi</div>", unsafe_allow_html=True)
-                siaga_card(primary)
+                siaga_card(better_val)
             with cb:
                 st.markdown(f"<div style='font-size:.65rem;color:{MUTED};text-transform:uppercase;"
                             f"letter-spacing:.08em;margin-bottom:.3rem;'>"
@@ -1261,10 +1344,10 @@ with main_col:
     # ══════════════════════════════════════════════════════════════════════
     elif page == "Evaluasi Model":
         st.markdown(
-            f"<div style='font-size:.65rem;color:{MUTED};text-transform:uppercase;"
-            f"letter-spacing:.08em;margin-bottom:.6rem;'>"
-            f"Komparasi Performa LSTM vs Random Forest · Data 2016–2020</div>",
-            unsafe_allow_html=True)
+                f"<div style='font-size:.65rem;color:{MUTED};text-transform:uppercase;"
+                f"letter-spacing:.08em;margin:.4rem 0 .3rem;'>"
+                f"Ringkasan Performa Tahunan (Train & Test)</div>",
+                unsafe_allow_html=True)
 
         # Status data
         n_ok = sum(1 for d in EVAL_DATA.values() if d.get("ok"))
@@ -1534,23 +1617,59 @@ with main_col:
                 f"Ringkasan Per Tahun</div>",
                 unsafe_allow_html=True)
 
+            # GANTI BLOK KODE INI (Sekitar baris 575 - 595)
+            # ==============================================================================
+            # FINAL OK: TABEL DINAMIS MENGIKUTI EVALUASI MURNI NOTEBOOK
+            # ==============================================================================
             rows_yr = []
             for yr in sel_years:
-                d     = EVAL_DATA[yr]
-                act   = d["actual"]
-                rmse_l = float(np.sqrt(np.mean((act - d["lstm"])**2)))
-                rmse_r = float(np.sqrt(np.mean((act - d["rf"])**2)))
-                mae_l  = float(np.mean(np.abs(act - d["lstm"])))
-                mae_r  = float(np.mean(np.abs(act - d["rf"])))
-                # R2 lokal per tahun
-                ss_res_l = np.sum((act - d["lstm"])**2)
-                ss_res_r = np.sum((act - d["rf"])**2)
-                ss_tot   = np.sum((act - act.mean())**2)
-                r2_l = float(1 - ss_res_l/ss_tot) if ss_tot > 0 else 0.0
-                r2_r = float(1 - ss_res_r/ss_tot) if ss_tot > 0 else 0.0
+                d = EVAL_DATA.get(yr)
+                # Kalo misal data di tahun itu kosong/gak ada, skip aja
+                if not d or len(d.get("actual", [])) == 0:
+                    continue
+                
+                # Ubah ke array numpy biar enak dihitung metriknya
+                # PENTING: LSTM dibandingkan dgn actual_lstm miliknya sendiri, RF
+                # dgn actual_rf miliknya sendiri — bukan actual gabungan — supaya
+                # tidak ada tanggal LSTM yang kebetulan dicocokkan ke nilai actual
+                # dari test-set RF (atau sebaliknya).
+                act_l = np.array(d.get("actual_lstm", d["actual"]))
+                act_r = np.array(d.get("actual_rf", d["actual"]))
+                l_p = np.array(d["lstm"])
+                r_p = np.array(d["rf"])
+                
+                # Fungsi itung metrik real-time pakai numpy murni
+                def calc_metrics(y_true, y_pred):
+                    mask = ~(np.isnan(y_true) | np.isnan(y_pred))
+                    y_true, y_pred = y_true[mask], y_pred[mask]
+                    if len(y_true) == 0: return 0, 0, 0
+                    rmse = np.sqrt(np.mean((y_true - y_pred)**2))
+                    mae = np.mean(np.abs(y_true - y_pred))
+                    ss_res = np.sum((y_true - y_pred)**2)
+                    ss_tot = np.sum((y_true - np.mean(y_true))**2)
+                    r2 = 1 - (ss_res / ss_tot) if ss_tot != 0 else 0
+                    return rmse, mae, r2
+
+                rmse_l, mae_l, r2_l = calc_metrics(act_l, l_p)
+                rmse_r, mae_r, r2_r = calc_metrics(act_r, r_p)
+                
                 unggul = "🤖 LSTM" if rmse_l < rmse_r else "🌲 RF"
+                
+                # Fase mengikuti sumber data asli (diisi oleh _get_eval_data_cached):
+                # "test" kalau tahun ini punya test-set asli (out-of-sample),
+                # "train" kalau dipenuhi dari data latih asli (in-sample, jujur
+                # ditandai begitu), atau fallback simulasi kalau dua2nya kosong.
+                src_fase = d.get("fase")
+                if src_fase == "test":
+                    fase = "Uji (Test)"
+                elif src_fase == "train":
+                    fase = "Latih (Train)"
+                else:
+                    fase = "Uji (Test)" if yr >= 2020 else "Latih (Train)*"  # * = data simulasi
+                
                 rows_yr.append({
                     "Tahun"     : yr,
+                    "Fase"      : fase,
                     "RMSE LSTM" : round(rmse_l, 2),
                     "RMSE RF"   : round(rmse_r, 2),
                     "MAE LSTM"  : round(mae_l,  2),
@@ -1558,7 +1677,6 @@ with main_col:
                     "R² LSTM"   : round(r2_l, 4),
                     "R² RF"     : round(r2_r, 4),
                     "Unggul"    : unggul,
-                    "Data"      : "Nyata" if d.get("ok") else "Simulasi",
                 })
 
             df_tbl = pd.DataFrame(rows_yr)
@@ -1573,16 +1691,17 @@ with main_col:
             try:
                 styled = df_tbl.style.map(_style_unggul, subset=["Unggul"])
             except AttributeError:
-                # fallback untuk pandas lama yang belum punya .map
                 styled = df_tbl.style.applymap(_style_unggul, subset=["Unggul"])
 
             st.dataframe(styled, use_container_width=True, hide_index=True)
             st.caption(
-                "Catatan: RMSE/MAE/R² per tahun dihitung dari prediksi model nyata "
-                "jika data CSV tersedia, atau simulasi deterministik jika tidak. "
-                "LSTM konsisten unggul sesuai hasil training notebook Anda."
+                "💡 **Info:** Fase **Latih (Train)** menampilkan performa model saat mengenali pola dari data historis (2016-2019). "
+                "Fase **Uji (Test)** menampilkan performa asli model saat memprediksi data masa depan yang belum pernah dilihat sebelumnya (2020)."
             )
 
+    # ══════════════════════════════════════════════════════════════════════
+    # RIWAYAT
+    # ══════════════════════════════════════════════════════════════════════
     # ══════════════════════════════════════════════════════════════════════
     # RIWAYAT
     # ══════════════════════════════════════════════════════════════════════
@@ -1601,9 +1720,9 @@ with main_col:
             hist_with_no = []
             for idx, h in enumerate(hist):
                 new_h = {"No.": idx + 1}
-                # Salin data lama tanpa kolom "Terbaik" jika ada
+                # Biarkan kolom skalar LSTM & RF lewat agar tampil di tabel utama
                 for k, v in h.items():
-                    if k != "Terbaik" and k != "lstm_series" and k != "rf_series":
+                    if k not in ("Terbaik", "lstm_series", "rf_series"):
                         new_h[k] = v
                 hist_with_no.append(new_h)
                 
