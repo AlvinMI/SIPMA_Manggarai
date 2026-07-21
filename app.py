@@ -458,24 +458,25 @@ def inv(sc, val):
     return None if (r < 0 or r > 2000) else r
 
 def pred_lstm(arr):
+    """Kembalikan list 6 nilai prediksi ASLI [h+1..h+6] dari model, atau None."""
     if not MDL.get("lstm_ok"): return None
     try:
         sc = MDL["sl"]
         w  = MDL.get("window", 24)
-        p  = MDL["lstm"].predict(sc.transform(arr).reshape(1,w,1), verbose=0)
-        return inv(sc, float(p[0][0]))
-    except: return None
+        p  = MDL["lstm"].predict(sc.transform(arr).reshape(1,w,1), verbose=0)  # shape (1,6)
+        return [inv(sc, float(v)) for v in p[0]]
+    except Exception:
+        return None
 
 def pred_rf(arr):
+    """Kembalikan list 6 nilai prediksi ASLI [h+1..h+6] dari model, atau None.
+    (RF sekarang MultiOutputRegressor -> predict() sudah mengeluarkan 6 kolom)"""
     if not MDL.get("rf_ok"): return None
     try:
         sr = MDL.get("sr")   # scaler_rf_daily.sav — MinMaxScaler(feature_range=(0,1)), fit pada tma_mean
-        # Sesuai notebook RF: scale tiap nilai dengan sr, bentuk window (1, 24), predict, inverse
         scaled_flat = sr.transform(arr).flatten().reshape(1, -1)  # (1, 24)
-        raw_p = MDL["rf"].predict(scaled_flat)
-        r = float(sr.inverse_transform([[raw_p[0]]])[0][0])
-        if r > 2000: r /= 10.0
-        return None if (r < 0 or r > 2000) else r
+        raw_p = MDL["rf"].predict(scaled_flat)   # shape (1,6)
+        return [inv(sr, float(v)) for v in raw_p[0]]
     except Exception:
         return None
 
@@ -759,48 +760,36 @@ if run:
         if r_l is None and r_r is None:
             st.error("Kedua model gagal. Cek file model di folder `models/`.")
         else:
-            ts      = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
-            primary = r_l if r_l is not None else r_r
+            ts = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+
+            # r_l dan r_r SEKARANG list 6 nilai ASLI [h+1..h+6] langsung dari model
+            # (bukan fabrikasi lagi) -> pakai nilai h+6 (elemen terakhir) sebagai
+            # ringkasan skalar untuk status siaga, badge, dan tabel riwayat.
+            r_l_h6 = r_l[-1] if r_l else None
+            r_r_h6 = r_r[-1] if r_r else None
+            primary = r_l_h6 if r_l_h6 is not None else r_r_h6
             sg      = get_siaga(primary)
-            
+
             # SESUDAH — pakai tanggal yang sudah diambil sekali di Langkah 2, bukan re-parse
             base_date_data = st.session_state.get("_uploaded_last_date") if method == "Upload File" else None
             if base_date_data is None or pd.isna(base_date_data):
                 base_date_data = datetime.now() - pd.Timedelta(days=5)  # fallback utk input manual
-            
-            # Jika manual atau parser gagal, gunakan tanggal hari ini minus 5 hari (biar seolah-olah data berakhir tgl 24 jika skrg tgl 29)
-            if base_date_data is None or pd.isna(base_date_data):
-                base_date_data = datetime.now() - pd.Timedelta(days=5)
-            
-            # Hitung rincian t+1 s/d t+6
-            import hashlib
-            def _get_curve_vals(target_val, seed_extra):
-                if target_val is None: return [None]*6
-                seed_val = int(hashlib.md5(f"{last_cm:.2f}_{target_val:.2f}_{seed_extra}".encode()).hexdigest(), 16) % (2**32)
-                rng = np.random.default_rng(seed_val)
-                t_norm = np.array([i / 6 for i in range(1, 7)])
-                ease = t_norm * t_norm * (3 - 2 * t_norm)
-                base = last_cm + (target_val - last_cm) * ease
-                noise = rng.normal(0, 1, size=6) * (abs(target_val - last_cm) * 0.12 + 8) * t_norm
-                ys = (base + noise).tolist()
-                ys[-1] = target_val
-                return [round(v, 2) for v in ys]
 
-            lstm_series = _get_curve_vals(r_l, seed_extra=0)
-            rf_series   = _get_curve_vals(r_r, seed_extra=1)
+            lstm_series = [round(v, 2) if v is not None else None for v in r_l] if r_l else [None]*6
+            rf_series   = [round(v, 2) if v is not None else None for v in r_r] if r_r else [None]*6
 
             st.session_state.result = dict(
-                arr=arr, last_cm=last_cm, lstm=r_l, rf=r_r, ts=ts, siaga=sg,
+                arr=arr, last_cm=last_cm, lstm=r_l_h6, rf=r_r_h6, ts=ts, siaga=sg,
                 lstm_series=lstm_series, rf_series=rf_series,
                 base_date_data=base_date_data.strftime("%Y-%m-%d")
             )
-            
+
             # KEMBALIKAN KEY SKALAR BIAR TABEL UTAMA RIWAYAT TIDAK KOSONG (—)
             st.session_state.history.append({
                 "Waktu"        : ts,
                 "TMA (cm)"     : round(last_cm, 1),
-                "LSTM t+6 hari (cm)": round(r_l, 2) if r_l else "—",
-                "RF t+6 hari (cm)"  : round(r_r, 2) if r_r else "—",
+                "LSTM t+6 hari (cm)": round(r_l_h6, 2) if r_l_h6 is not None else "—",
+                "RF t+6 hari (cm)"  : round(r_r_h6, 2) if r_r_h6 is not None else "—",
                 "Status"       : f"{sg['icon']} Siaga {sg['lvl']} · {sg['label']}",
                 "lstm_series"  : lstm_series,
                 "rf_series"    : rf_series
@@ -910,38 +899,19 @@ with main_col:
     st.markdown(f"<hr style='margin:.3rem 1rem .6rem;'/>", unsafe_allow_html=True)
 
     # ── HELPERS ───────────────────────────────────────────────────────────
-    def mk_chart(arr, r_l=None, r_r=None, sl=True, sr=True, band=True):
+    def mk_chart(arr, lstm_series=None, rf_series=None, sl=True, sr=True, band=True):
         """
         Grafik PREDIKSI SAJA — H+1 s/d H+N.
-        Tampilkan LSTM dan/atau RF sesuai toggle.
-        Interpolasi non-linear dengan variasi realistis.
+        Menampilkan lstm_series/rf_series ASLI (6 nilai langsung dari model),
+        bukan kurva fabrikasi/interpolasi.
         """
-        import hashlib
         hist = arr.flatten()
         last = float(hist[-1])
         FORECAST = MDL.get("forecast", 6)
         pred_xs  = list(range(1, FORECAST + 1))
 
-        def _make_curve(target_val, seed_extra=0):
-            """Buat kurva non-linear dari last → target_val dengan variasi realistis."""
-            if target_val is None:
-                return []
-            seed_val = int(hashlib.md5(
-                f"{last:.2f}_{target_val:.2f}_{seed_extra}".encode()
-            ).hexdigest(), 16) % (2**32)
-            rng      = np.random.default_rng(seed_val)
-            t_norm   = np.array([i / FORECAST for i in pred_xs])
-            ease     = t_norm * t_norm * (3 - 2 * t_norm)   # smoothstep
-            base     = last + (target_val - last) * ease
-            amplitude   = abs(target_val - last) * 0.12 + 8
-            uncertainty = amplitude * t_norm
-            noise    = rng.normal(0, 1, size=FORECAST) * uncertainty
-            ys       = (base + noise).tolist()
-            ys[-1]   = target_val   # titik akhir selalu nilai prediksi asli
-            return ys
-
-        pred_ys_l = _make_curve(r_l, seed_extra=0) if (sl and r_l is not None) else []
-        pred_ys_r = _make_curve(r_r, seed_extra=1) if (sr and r_r is not None) else []
+        pred_ys_l = lstm_series if (sl and lstm_series) else []
+        pred_ys_r = rf_series if (sr and rf_series) else []
 
         all_vals = [last] + pred_ys_l + pred_ys_r
         ymax = max(max(all_vals) * 1.12, 1000)
@@ -1236,7 +1206,7 @@ with main_col:
             show_lstm = _cck1.checkbox("LSTM", value=True, key="ck_l")
             show_rf   = _cck2.checkbox("RF",   value=True, key="ck_r")
             show_band = _cck3.checkbox("±5%",  value=True, key="ck_b")
-            st.plotly_chart(mk_chart(res["arr"], L, Rv, show_lstm, show_rf, show_band),
+            st.plotly_chart(mk_chart(res["arr"], res["lstm_series"], res["rf_series"], show_lstm, show_rf, show_band),
                             use_container_width=True, config={"displayModeBar":False})
 
             ca, cb = st.columns(2)
