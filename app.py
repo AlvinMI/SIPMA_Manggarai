@@ -447,6 +447,11 @@ def extract_series_and_date(df):
 
 MDL = load_models()
 
+if not MDL.get("lstm_ok"):
+    st.warning(f"⚠️ LSTM tidak siap: {MDL.get('lstm_err', 'unknown error')}")
+if not MDL.get("rf_ok"):
+    st.warning(f"⚠️ RF tidak siap: {MDL.get('rf_err', 'unknown error')}")
+
 def sanitize(raw):
     arr = np.array(raw, dtype=float).flatten()[:24].reshape(-1,1)
     if np.median(arr) > 2000: arr /= 10.0
@@ -760,19 +765,24 @@ if run:
         with st.spinner("Menghitung prediksi…"):
             r_l = pred_lstm(arr); r_r = pred_rf(arr)
         if r_l is None and r_r is None:
-            # Kita panggil langsung fungsinya tanpa try-except internal biar KELUAR ERROR ASLINYA
             st.write("🔍 **Debugging Error Model:**")
+            st.write(f"lstm_ok = {MDL.get('lstm_ok')}, rf_ok = {MDL.get('rf_ok')}")
+            if not MDL.get("lstm_ok"):
+                st.error(f"🚨 LSTM gagal saat load: {MDL.get('lstm_err')}")
+            if not MDL.get("rf_ok"):
+                st.error(f"🚨 RF gagal saat load: {MDL.get('rf_err')}")
+
             try:
                 st.write("Coba eksekusi pred_lstm...")
                 pred_lstm(arr)
             except Exception as e_lstm:
-                st.error(f"🚨 Error di LSTM: {e_lstm}")
+                st.error(f"🚨 Error di LSTM saat prediksi: {e_lstm}")
 
             try:
                 st.write("Coba eksekusi pred_rf...")
                 pred_rf(arr)
             except Exception as e_rf:
-                st.error(f"🚨 Error di Random Forest: {e_rf}")
+                st.error(f"🚨 Error di Random Forest saat prediksi: {e_rf}")
 
             st.error("Kedua model gagal. Lihat detail pesan merah di atas untuk solusinya.")
         else:
