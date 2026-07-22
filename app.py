@@ -729,7 +729,7 @@ with panel_col:
                     data_series = vals[-24:].tolist()
                     st.success(f"✅ {len(vals)} data dimuat (dipakai 24 terakhir).")
             except Exception as e:
-                st.error(f"🚨 Detail Error Asli dari Python: {e}")
+                st.error(f"Gagal membaca file: {e}")
     else:
         st.caption("TMA (cm) harian · terlama→terbaru (H-24 = 24 hari lalu)")
         ci = st.columns(2)
@@ -758,7 +758,21 @@ if run:
         with st.spinner("Menghitung prediksi…"):
             r_l = pred_lstm(arr); r_r = pred_rf(arr)
         if r_l is None and r_r is None:
-            st.error("Kedua model gagal. Cek file model di folder `models/`.")
+            # Kita panggil langsung fungsinya tanpa try-except internal biar KELUAR ERROR ASLINYA
+            st.write("🔍 **Debugging Error Model:**")
+            try:
+                st.write("Coba eksekusi pred_lstm...")
+                pred_lstm(arr)
+            except Exception as e_lstm:
+                st.error(f"🚨 Error di LSTM: {e_lstm}")
+
+            try:
+                st.write("Coba eksekusi pred_rf...")
+                pred_rf(arr)
+            except Exception as e_rf:
+                st.error(f"🚨 Error di Random Forest: {e_rf}")
+
+            st.error("Kedua model gagal. Lihat detail pesan merah di atas untuk solusinya.")
         else:
             ts = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
 
