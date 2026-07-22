@@ -1872,12 +1872,12 @@ with main_col:
 
             # ── Riwayat prediksi sesi ini ───────────────────────────────
             if st.session_state.history:
-            st.markdown(f"<div class='pcap'>📜 Riwayat Prediksi Sesi Ini</div>", unsafe_allow_html=True)
-            df_history = pd.DataFrame(st.session_state.history[::-1]).replace(['—', '-'], np.nan)
-            for col in df_history.columns:
-                if any(k in col for k in ['RF', 'TMA', 't+', 'hari', 'cm']):
-                    df_history[col] = pd.to_numeric(df_history[col], errors='coerce')
-            st.dataframe(df_history, width="stretch", hide_index=True)
+                st.markdown(f"<div class='pcap'>📜 Riwayat Prediksi Sesi Ini</div>", unsafe_allow_html=True)
+                df_history = pd.DataFrame(st.session_state.history[::-1]).replace(['—', '-'], np.nan)
+                for col in df_history.columns:
+                    if any(k in col for k in ['RF', 'TMA', 't+', 'hari', 'cm']):
+                        df_history[col] = pd.to_numeric(df_history[col], errors='coerce')
+                st.dataframe(df_history, width="stretch", hide_index=True)
 
             # ── Export laporan lengkap ──────────────────────────────────
             st.markdown(f"<div class='pcap'>📥 Export Laporan</div>", unsafe_allow_html=True)
