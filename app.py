@@ -463,9 +463,10 @@ def pred_lstm(arr):
     try:
         sc = MDL["sl"]
         w  = MDL.get("window", 24)
-        p  = MDL["lstm"].predict(sc.transform(arr).reshape(1,w,1), verbose=0)  # shape (1,6)
+        p  = MDL["lstm"].predict(sc.transform(arr).reshape(1,w,1), verbose=0) 
         return [inv(sc, float(v)) for v in p[0]]
-    except Exception:
+    except Exception as e:
+        st.error(f"💥 ERROR ASLI LSTM: {e}") 
         return None
 
 def pred_rf(arr):
@@ -473,11 +474,12 @@ def pred_rf(arr):
     (RF sekarang MultiOutputRegressor -> predict() sudah mengeluarkan 6 kolom)"""
     if not MDL.get("rf_ok"): return None
     try:
-        sr = MDL.get("sr")   # scaler_rf_daily.sav — MinMaxScaler(feature_range=(0,1)), fit pada tma_mean
-        scaled_flat = sr.transform(arr).flatten().reshape(1, -1)  # (1, 24)
-        raw_p = MDL["rf"].predict(scaled_flat)   # shape (1,6)
+        sr = MDL.get("sr")   
+        scaled_flat = sr.transform(arr).flatten().reshape(1, -1)  
+        raw_p = MDL["rf"].predict(scaled_flat)   
         return [inv(sr, float(v)) for v in raw_p[0]]
-    except Exception:
+    except Exception as e:
+        st.error(f"💥 ERROR ASLI RF: {e}")
         return None
 
 # ── DATA EVALUASI — auto mengikuti model & data terbaru ────────────────────
