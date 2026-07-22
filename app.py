@@ -1190,10 +1190,11 @@ with main_col:
             better_lbl = better
             better_val = L if better == "LSTM" else Rv
             
-            c2.metric(f"🏆 Prediksi Terbaik ({better_lbl})",
+            c2.metric(f"🏆 Model Acuan ({better_lbl})",
                       f"{better_val:.2f} cm" if better_val else "N/A",
                       delta=f"{better_val-last:+.2f} cm" if better_val else None,
-                      delta_color="inverse" if (better_val and better_val>last) else "normal")
+                      delta_color="inverse" if (better_val and better_val>last) else "normal",
+                      help="Dipilih berdasarkan RMSE historis keseluruhan, bukan akurasi khusus untuk prediksi ini.")
             c3.metric("📅 Hari Prediksi", f"t+{MDL.get('forecast',6)} hari",
                     #   f"{Rv:.2f} cm" if Rv else "N/A",
                     #   delta=f"{Rv-last:+.2f} cm" if Rv else None,
@@ -1275,8 +1276,9 @@ with main_col:
                 <b style="font-size:.7rem;color:{MUTED};text-transform:uppercase;
                            letter-spacing:.08em;">Kesimpulan</b>
                 <p style="margin:.5rem 0 0;font-size:.86rem;color:{MUTED};">
-                    {diff}Model <b style="color:{G};">{better}</b> direkomendasikan
-                    (RMSE {EVAL[better]['RMSE']:.4f} · R² {EVAL[better]['R2']:.4f}).
+                    {diff}Model <b style='color:{G};'>{better}</b> lebih diunggulkan secara historis "
+                    (RMSE {EVAL[better]['RMSE']:.4f} · R² {EVAL[better]['R2']:.4f}), "
+                    namun akurasi aktual untuk prediksi ini baru diketahui setelah data TMA sesungguhnya tersedia."
                     Proyeksi:
                     <b style="color:{sg['color']};">Siaga {sg['lvl']} — {sg['label']}</b>.
                 </p>
@@ -1651,10 +1653,6 @@ with main_col:
                 
                 unggul = "🤖 LSTM" if rmse_l < rmse_r else "🌲 RF"
                 
-                # Fase mengikuti sumber data asli (diisi oleh _get_eval_data_cached):
-                # "test" kalau tahun ini punya test-set asli (out-of-sample),
-                # "train" kalau dipenuhi dari data latih asli (in-sample, jujur
-                # ditandai begitu), atau fallback simulasi kalau dua2nya kosong.
                 src_fase = d.get("fase")
                 if src_fase == "test":
                     fase = "Uji (Test)"
