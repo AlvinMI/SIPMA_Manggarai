@@ -729,7 +729,7 @@ with panel_col:
                     data_series = vals[-24:].tolist()
                     st.success(f"✅ {len(vals)} data dimuat (dipakai 24 terakhir).")
             except Exception as e:
-                st.error(f"Gagal membaca file: {e}")
+                st.error(f"🚨 Detail Error Asli dari Python: {e}")
     else:
         st.caption("TMA (cm) harian · terlama→terbaru (H-24 = 24 hari lalu)")
         ci = st.columns(2)
