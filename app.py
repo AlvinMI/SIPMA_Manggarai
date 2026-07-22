@@ -1663,7 +1663,7 @@ with main_col:
             except AttributeError:
                 styled = df_tbl.style.applymap(_style_unggul, subset=["Unggul"])
 
-            st.dataframe(styled, use_container_width=True, hide_index=True)
+            st.dataframe(styled, width="stretch", hide_index=True)
             st.caption(
                 "💡 **Info:** Fase **Latih (Train)** menampilkan performa model saat mengenali pola dari data historis (2016-2019). "
                 "Fase **Uji (Test)** menampilkan performa asli model saat memprediksi data masa depan yang belum pernah dilihat sebelumnya (2020)."
@@ -1704,7 +1704,7 @@ with main_col:
             c3.metric("🔴 Bahaya",    sum(1 for h in hist if "BAHAYA" in h["Status"]))
             c4.metric("🟠 Kritis",    sum(1 for h in hist if "KRITIS"  in h["Status"]))
 
-            st.dataframe(df_all, use_container_width=True, hide_index=True)
+            st.dataframe(df_all, width="stretch", hide_index=True)
 
             # ── Export semua riwayat ──
             ce, cd = st.columns([3,1])
@@ -1788,7 +1788,11 @@ with main_col:
             _df_single = pd.DataFrame(_hist_rows)
 
             st.write(f"ℹ️ **Preview Rincian Data (H+1 s/d H+6): Riwayat #{nomor_pilihan}**")
-            st.dataframe(_df_single, use_container_width=True, hide_index=True)
+            _df_single_clean = _df_single.replace(['—', '-'], np.nan)
+            for col in _df_single_clean.columns:
+                if any(k in col for k in ['RF', 'TMA', 't+', 'hari', 'cm']):
+                    _df_single_clean[col] = pd.to_numeric(_df_single_clean[col], errors='coerce')
+            st.dataframe(_df_single_clean, width="stretch", hide_index=True)
 
             fn_csv = "sipma_riwayat_rinci_" + str(nomor_pilihan) + ".csv"
             fn_xlsx = "sipma_riwayat_rinci_" + str(nomor_pilihan) + ".xlsx"
@@ -1868,10 +1872,12 @@ with main_col:
 
             # ── Riwayat prediksi sesi ini ───────────────────────────────
             if st.session_state.history:
-                st.markdown(f"<div class='pcap'>📜 Riwayat Prediksi Sesi Ini</div>",
-                            unsafe_allow_html=True)
-                st.dataframe(pd.DataFrame(st.session_state.history[::-1]),
-                            use_container_width=True, hide_index=True)
+            st.markdown(f"<div class='pcap'>📜 Riwayat Prediksi Sesi Ini</div>", unsafe_allow_html=True)
+            df_history = pd.DataFrame(st.session_state.history[::-1]).replace(['—', '-'], np.nan)
+            for col in df_history.columns:
+                if any(k in col for k in ['RF', 'TMA', 't+', 'hari', 'cm']):
+                    df_history[col] = pd.to_numeric(df_history[col], errors='coerce')
+            st.dataframe(df_history, width="stretch", hide_index=True)
 
             # ── Export laporan lengkap ──────────────────────────────────
             st.markdown(f"<div class='pcap'>📥 Export Laporan</div>", unsafe_allow_html=True)
