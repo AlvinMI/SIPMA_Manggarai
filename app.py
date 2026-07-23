@@ -444,7 +444,7 @@ def parse_dates_smart(date_series):
     if iso_try.notna().sum() >= max(1, int(len(raw) * 0.9)):
         return iso_try, "YYYY-MM-DD (ISO)", False
 
-        parts = raw.str.extract(r'^(\d{1,4})[/\-.](\d{1,2})[/\-.](\d{1,4})$')
+    parts = raw.str.extract(r'^(\d{1,4})[/\-.](\d{1,2})[/\-.](\d{1,4})$')
     bukti_dayfirst = False
     bukti_monthfirst = False
     if parts.notna().all(axis=1).sum() > 0:
