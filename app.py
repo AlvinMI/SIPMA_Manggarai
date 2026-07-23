@@ -1,7 +1,13 @@
 """SIPMA — Sistem Informasi Prediksi Muka Air · Pintu Air Manggarai"""
 import os; os.environ["KERAS_BACKEND"] = "tensorflow"
 import io, streamlit as st, pandas as pd, numpy as np, joblib
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
+
+WIB = timezone(timedelta(hours=7))
+
+def now_wib():
+    return datetime.now(WIB)
+
 import plotly.graph_objects as go
 from tensorflow.keras.models import load_model
 import streamlit.components.v1 as components
@@ -427,6 +433,37 @@ def parse_tma_file(file_bytes, filename):
                 df = pd.DataFrame(data_rows, columns=header)
     return df
 
+def parse_dates_smart(date_series):
+    """
+    Deteksi format tanggal (DD/MM vs MM/DD) dari SELURUH kolom, bukan per-baris.
+    Mengembalikan (parsed_dates, format_terdeteksi, ambigu_bool).
+    """
+    raw = date_series.astype(str).str.strip()
+
+    iso_try = pd.to_datetime(raw, format="%Y-%m-%d", errors="coerce")
+    if iso_try.notna().sum() >= max(1, int(len(raw) * 0.9)):
+        return iso_try, "YYYY-MM-DD (ISO)", False
+
+        parts = raw.str.extract(r'^(\d{1,4})[/\-.](\d{1,2})[/\-.](\d{1,4})$')
+    bukti_dayfirst = False
+    bukti_monthfirst = False
+    if parts.notna().all(axis=1).sum() > 0:
+        p1 = pd.to_numeric(parts[0], errors="coerce")
+        p2 = pd.to_numeric(parts[1], errors="coerce")
+        p3 = pd.to_numeric(parts[2], errors="coerce")
+        if (p1 > 999).any():          
+            return pd.to_datetime(raw, errors="coerce"), "YYYY-MM-DD", False
+        if (p1 > 12).any():           
+            bukti_dayfirst = True
+        if (p2 > 12).any():           
+            bukti_monthfirst = True
+
+    if bukti_dayfirst and not bukti_monthfirst:
+        return pd.to_datetime(raw, errors="coerce", dayfirst=True), "DD/MM/YYYY", False
+    if bukti_monthfirst and not bukti_dayfirst:
+        return pd.to_datetime(raw, errors="coerce", dayfirst=False), "MM/DD/YYYY", False
+
+    return pd.to_datetime(raw, errors="coerce", dayfirst=True), "DD/MM/YYYY (asumsi, tidak ada bukti kuat di data)", True
 
 def extract_series_and_date(df):
     """Dari DataFrame bersih -> (array nilai TMA, tanggal terakhir/None). Satu sumber kebenaran."""
@@ -435,15 +472,20 @@ def extract_series_and_date(df):
     date_col = next((c for c in df.columns
                       if str(c).lower() in ("tanggal","date","datetime","waktu","index","time")), None)
     candidates = [c for c in df.columns if c != date_col] if date_col else list(df.columns)
-    df_num = df[candidates].apply(pd.to_numeric, errors="coerce")
+    df_fix = df[candidates].apply(
+        lambda col: col.astype(str).str.replace(",", ".", regex=False) if col.dtype == object else col
+    )
+    df_num = df_fix.apply(pd.to_numeric, errors="coerce")
     good = df_num.count(); good = good[good > 0]
     vals = df_num[good.idxmax()].dropna().values if len(good) else None
     last_date = None
     if date_col is not None:
-        pd_dates = pd.to_datetime(df[date_col], errors="coerce").dropna()
+        pd_dates_raw, fmt_terdeteksi, is_ambigu = parse_dates_smart(df[date_col])
+        pd_dates = pd_dates_raw.dropna()
         if len(pd_dates):
             last_date = pd_dates.iloc[-1]
-    return vals, last_date
+    fmt_info = {"format": fmt_terdeteksi, "ambigu": is_ambigu} if date_col is not None else None
+    return vals, last_date, fmt_info
 
 MDL = load_models()
 
@@ -707,7 +749,7 @@ with panel_col:
                 # SESUDAH
                 file_bytes = uploaded.read()
                 df_clean = parse_tma_file(file_bytes, uploaded.name)
-                vals, file_last_date = extract_series_and_date(df_clean)
+                vals, file_last_date, fmt_info = extract_series_and_date(df_clean)
 
                 # Fallback terakhir kalau parser di atas tetap gagal total
                 if vals is None or len(vals) < 24:
@@ -726,7 +768,8 @@ with panel_col:
                     if len(numbers) >= 24:
                         vals = np.array(numbers)
 
-                st.session_state["_uploaded_last_date"] = file_last_date  # simpan buat dipakai saat prediksi
+                st.session_state["_uploaded_last_date"] = file_last_date 
+                st.session_state["_uploaded_fmt_info"] = fmt_info
 
                 # ── Validasi hasil ─────────────────────────────────────
                 if vals is None or len(vals) < 24:
@@ -735,6 +778,21 @@ with panel_col:
                 else:
                     data_series = vals[-24:].tolist()
                     st.success(f"✅ {len(vals)} data dimuat (dipakai 24 terakhir).")
+
+                    if file_last_date is not None:
+                        if fmt_info and fmt_info["ambigu"]:
+                            st.warning(
+                                f"⚠️ Tanggal terakhir terbaca: **{file_last_date.strftime('%d %B %Y')}** "
+                                f"(format diasumsikan {fmt_info['format']} — semua tanggal di file ini ≤12 di kedua posisi, "
+                                f"jadi sistem tidak punya bukti kuat untuk memastikan urutan hari/bulan). "
+                                f"**Cek dulu: apakah tanggal di atas sudah sesuai file aslimu?** Kalau tidak, ubah manual "
+                                f"salah satu tanggal (misal tanggal ke-13 ke atas) untuk memberi sistem kepastian format."
+                            )
+                        else:
+                            st.caption(
+                                f"🗓️ Tanggal data terakhir terbaca: **{file_last_date.strftime('%d %B %Y')}** "
+                                f"(format terdeteksi: {fmt_info['format']})."
+                            )
             except Exception as e:
                 st.error(f"Gagal membaca file: {e}")
     else:
@@ -786,7 +844,7 @@ if run:
 
             st.error("Kedua model gagal. Lihat detail pesan merah di atas untuk solusinya.")
         else:
-            ts = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+            ts = now_wib().strftime("%d/%m/%Y %H:%M:%S")
 
             # r_l dan r_r SEKARANG list 6 nilai ASLI [h+1..h+6] langsung dari model
             # (bukan fabrikasi lagi) -> pakai nilai h+6 (elemen terakhir) sebagai
@@ -799,7 +857,7 @@ if run:
             # SESUDAH — pakai tanggal yang sudah diambil sekali di Langkah 2, bukan re-parse
             base_date_data = st.session_state.get("_uploaded_last_date") if method == "Upload File" else None
             if base_date_data is None or pd.isna(base_date_data):
-                base_date_data = datetime.now() - pd.Timedelta(days=5)  # fallback utk input manual
+                base_date_data = now_wib() - pd.Timedelta(days=5)  # fallback utk input manual
 
             lstm_series = [round(v, 2) if v is not None else None for v in r_l] if r_l else [None]*6
             rf_series   = [round(v, 2) if v is not None else None for v in r_r] if r_r else [None]*6
@@ -818,7 +876,8 @@ if run:
                 "RF t+6 hari (cm)"  : round(r_r_h6, 2) if r_r_h6 is not None else "—",
                 "Status"       : f"{sg['icon']} Siaga {sg['lvl']} · {sg['label']}",
                 "lstm_series"  : lstm_series,
-                "rf_series"    : rf_series
+                "rf_series"    : rf_series,
+                "base_date_data": base_date_data.strftime("%Y-%m-%d"),  
             })
             st.session_state.history = st.session_state.history[-30:]
             _save_hist(st.session_state.history)
@@ -836,8 +895,8 @@ with main_col:
         f'{sg_now["icon"]} Siaga {sg_now["lvl"]}</span>'
     ) if sg_now else ""
 
-    t_str = datetime.now().strftime("%H:%M:%S")
-    d_str = datetime.now().strftime("%d %b %Y")
+    t_str = now_wib().strftime("%H:%M:%S")
+    d_str = now_wib().strftime("%d %b %Y")
 
     # Header
     st.markdown(f"""
@@ -1105,7 +1164,7 @@ with main_col:
         L, Rv = res["lstm"], res["rf"]
         FORECAST = MDL.get("forecast", 6)
         last_cm  = res["last_cm"]
-        ts_now   = datetime.now()
+        ts_now   = now_wib()
         better   = "LSTM" if EVAL["LSTM"]["RMSE"] < EVAL["RF"]["RMSE"] else "RF"
         best_val = L if L is not None else Rv
 
@@ -1288,14 +1347,14 @@ with main_col:
             st.markdown(f"<div class='pcap'>📥 Export Hasil Prediksi Rinci (t+1 s/d t+6)</div>",
                         unsafe_allow_html=True)
             _FORECAST = MDL.get("forecast", 6)
-            _ts_str   = datetime.now().strftime("%Y%m%d_%H%M")
+            _ts_str   = now_wib().strftime("%Y%m%d_%H%M")
             
             # Ambil tanggal data terakhir yang disimpan saat klik analisis
             try:
-                _base_dt_str = res.get("base_date_data", datetime.now().strftime("%Y-%m-%d"))
+                _base_dt_str = res.get("base_date_data", now_wib().strftime("%Y-%m-%d"))
                 _base_date = pd.to_datetime(_base_dt_str)
             except:
-                _base_date = datetime.now()
+                _base_date = now_wib()
             
             _lstm_s = res.get("lstm_series", [None]*6)
             _rf_s   = res.get("rf_series", [None]*6)
@@ -1366,10 +1425,11 @@ with main_col:
             )
         else:
             st.info(
-                f"ℹ️ File CSV tidak ditemukan di folder `data/`. "
-                f"Model aktif: **{model_l}** & **{model_r}**. "
-                f"Grafik menggunakan simulasi. Letakkan `Data_Final_Manggarai_Daily.csv` "
-                f"atau `Data_Final_Manggarai_Clean.csv` di folder `data/` untuk grafik nyata."
+                "📋 **Format data yang didukung:**\n"
+                "- Kolom tanggal: **DD/MM/YYYY** (contoh: 04/08/2020 = 4 Agustus 2020)\n"
+                "- Kolom TMA: angka dengan **titik (.)** sebagai desimal (contoh: 585.1). "
+                "Kalau file dari Excel Indonesia memakai koma (585,1), tidak masalah — sistem akan otomatis dikonversi.\n"
+                "- Minimal 24 baris data harian berurutan."
             )
 
         # Metrik ringkasan
@@ -1737,7 +1797,7 @@ with main_col:
                 df_all.to_excel(w, index=False, sheet_name="Riwayat_Prediksi")
             ce.download_button(
                 "⬇ Export Semua Riwayat (.xlsx)", data=buf.getvalue(),
-                file_name=f"sipma_riwayat_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
+                file_name=f"sipma_riwayat_{now_wib().strftime('%Y%m%d_%H%M')}.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 use_container_width=True)
                 
@@ -1769,10 +1829,12 @@ with main_col:
             waktu_analisis_str = _h_selected["Waktu"].split()[0] # Ambil tanggalnya aja (dd/mm/yyyy)
             
             try:
-                # Coba parse tanggal analisis asli sebagai base target timeline prediksi
-                base_date = pd.to_datetime(waktu_analisis_str, format="%d/%m/%Y")
+                if "base_date_data" in _h_selected:
+                    base_date = pd.to_datetime(_h_selected["base_date_data"])
+                else:
+                    base_date = pd.to_datetime(waktu_analisis_str, format="%d/%m/%Y")
             except:
-                base_date = datetime.now()
+                base_date = now_wib()
 
             # Ambil rincian array t+1 s/d t+6
             _l_series = _h_selected.get("lstm_series", None)
@@ -1849,7 +1911,7 @@ with main_col:
             better  = "LSTM" if EVAL["LSTM"]["RMSE"] < EVAL["RF"]["RMSE"] else "RF"
             best_val = L if L is not None else Rv
             FORECAST = MDL.get("forecast", 6)
-            ts_now   = datetime.now()
+            ts_now   = now_wib()
 
             # ── Ringkasan laporan ───────────────────────────────────────
             rows_lap = [
