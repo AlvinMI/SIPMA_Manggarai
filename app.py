@@ -577,8 +577,6 @@ def _get_eval_data_cached(_cache_key):
             "rf"         : s_rf,
         })
         df_murni = df_murni.dropna(how="all", subset=["lstm", "rf"])
-        df_murni[["lstm", "rf"]] = df_murni[["lstm", "rf"]].interpolate(limit_area="inside")
-        df_latih[["lstm", "rf"]] = df_latih[["lstm", "rf"]].interpolate(limit_area="inside")
 
         s_actual_l_tr = _series(lstm_d, "train_actual", "train_dates")
         s_actual_r_tr = _series(rf_d,   "train_actual", "train_dates")
@@ -604,12 +602,7 @@ def _get_eval_data_cached(_cache_key):
 
             found_any = False
             for yr in [2016, 2017, 2018, 2019, 2020]:
-                sub_test = df_murni[df_murni["year"] == yr]
-                sub_train = df_latih[df_latih["year"] == yr] if not df_latih.empty else df_latih
-
-                sub = pd.concat([sub_train, sub_test])
-                sub = sub[~sub.index.duplicated(keep="last")].sort_index()
-
+                sub = df_murni[df_murni["year"] == yr]
                 if len(sub) > 5:
                     found_any = True
                     result[yr] = {
@@ -621,7 +614,7 @@ def _get_eval_data_cached(_cache_key):
                         "dates": sub.index.values,
                         "n": len(sub),
                         "ok": True,
-                        "fase": "campuran",
+                        "fase": "test",
                         "is_outlier": np.zeros(len(sub), dtype=bool),
                     }
                 elif not df_latih.empty:
