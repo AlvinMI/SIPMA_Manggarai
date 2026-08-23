@@ -577,6 +577,7 @@ def _get_eval_data_cached(_cache_key):
             "rf"         : s_rf,
         })
         df_murni = df_murni.dropna(how="all", subset=["lstm", "rf"])
+        df_murni[["lstm", "rf"]] = df_murni[["lstm", "rf"]].interpolate(limit_area="inside")
 
         s_actual_l_tr = _series(lstm_d, "train_actual", "train_dates")
         s_actual_r_tr = _series(rf_d,   "train_actual", "train_dates")
